@@ -37,8 +37,8 @@ on conflict (slug) do update
       anatomy_palette = excluded.anatomy_palette;
 
 -- 2) Credentials (REPLACE THESE PASSWORDS) ----------------------------------
-select set_project_password('cor_slide_1_10', 'viewer', 'change-me-viewer');
-select set_project_password('cor_slide_1_10', 'admin',  'change-me-admin');
+select set_project_password('cor_slide_1_10', 'viewer', 'MSI2026');
+select set_project_password('cor_slide_1_10', 'admin',  'MSI2026');
 
 -- 3) Section 0 --------------------------------------------------------------
 insert into sections (project_id, ordinal, display_name, meta, storage_paths)
