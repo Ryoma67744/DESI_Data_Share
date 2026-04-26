@@ -376,25 +376,10 @@ $$;
 
 -- Issue a short-lived signed URL for a Storage object inside the
 -- `atlases` bucket. Path must be relative to the bucket root.
-create or replace function get_signed_url(p_token text, p_path text, p_expires int default 3600)
-returns text
-language plpgsql
-security definer
-set search_path = public, extensions, storage
-as $$
-declare
-  r record;
-  v_url text;
-begin
-  select * into r from _resolve_token(p_token);
-  -- Defensive: confine paths to the project's slug folder.
-  if position(((select slug from projects where id = r.project_id) || '/') in p_path) <> 1 then
-    raise exception 'path outside project folder';
-  end if;
-  select storage.create_signed_url('atlases', p_path, p_expires) into v_url;
-  return v_url;
-end
-$$;
+-- NOTE (Phase 1): we host the bucket as public read, so the frontend
+-- builds the URL directly. This RPC is kept dropped on purpose — it
+-- referenced a non-existent storage helper and is not called anywhere.
+drop function if exists get_signed_url(text, text, int);
 
 -- ---------------------------------------------------------------------------
 -- Grants — make the public RPCs callable from the anon key, hide internals
@@ -407,7 +392,6 @@ grant execute on function create_roi(text, uuid, text, jsonb, text) to anon, aut
 grant execute on function update_roi(text, uuid, int, text, jsonb)  to anon, authenticated;
 grant execute on function delete_roi(text, uuid)             to anon, authenticated;
 grant execute on function clear_all_rois(text)               to anon, authenticated;
-grant execute on function get_signed_url(text, text, int)    to anon, authenticated;
 
 -- Internals: keep callable only by the service_role (i.e. you in SQL editor).
 revoke all on function _resolve_token(text)                from public, anon, authenticated;
@@ -417,10 +401,12 @@ revoke all on function import_rois_jsonb(text, jsonb)       from public, anon, a
 -- ---------------------------------------------------------------------------
 -- Storage bucket
 -- ---------------------------------------------------------------------------
--- Creating it via SQL is allowed (bucket is private by default).
+-- Phase 1: served as public-read. The URL pattern is unguessable enough
+-- (project slug + section ordinal) for our research use case, and it
+-- avoids the complexity of signed URLs without a server.
 insert into storage.buckets (id, name, public)
-     values ('atlases', 'atlases', false)
-on conflict (id) do nothing;
+     values ('atlases', 'atlases', true)
+on conflict (id) do update set public = true;
 
 -- ===========================================================================
 -- Optional teardown (commented out by default)
@@ -432,7 +418,6 @@ on conflict (id) do nothing;
 -- drop function if exists list_rois(text, uuid);
 -- drop function if exists get_project_doc(text);
 -- drop function if exists unlock_project(text, text);
--- drop function if exists get_signed_url(text, text, int);
 -- drop function if exists import_rois_jsonb(text, jsonb);
 -- drop function if exists set_project_password(text, text, text);
 -- drop function if exists _resolve_token(text);

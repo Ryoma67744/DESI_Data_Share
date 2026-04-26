@@ -89,11 +89,15 @@
     return await rpc('get_project_doc', { p_token: tokenOrThrow() });
   }
 
-  async function getSignedUrl(path, expires) {
-    return await rpc('get_signed_url', {
-      p_token: tokenOrThrow(), p_path: path,
-      p_expires: typeof expires === 'number' ? expires : 3600,
-    });
+  // Phase 1: bucket is public read, so we build the URL directly
+  // instead of round-tripping through a signing RPC. The path is
+  // expected to be relative to the bucket root (e.g.
+  // "cor_slide_1_10/sections/0/he.tif"). Returns a Promise so
+  // callers using `await` keep working.
+  function getSignedUrl(path) {
+    if (!path) return Promise.resolve(null);
+    const safe = path.split('/').map(encodeURIComponent).join('/');
+    return Promise.resolve(`${URL_}/storage/v1/object/public/atlases/${safe}`);
   }
 
   async function listRois(sectionId) {
