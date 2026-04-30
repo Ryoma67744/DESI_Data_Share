@@ -92,15 +92,6 @@ body { font-family: 'Inter', sans-serif; background-color: #f4f4f5; }
 .picker-row .picker-row-name { font-size:11px; color:#0f172a; }
 .canvas-label { position:absolute; top:4px; left:4px; background:rgba(0,0,0,0.55); color:#fff; font-size:11px; padding:2px 6px; border-radius:3px; z-index:4; pointer-events:none; }
 .sec-canvas-cell.active .canvas-label { background:rgba(37,99,235,0.85); }
-/* Overlay mode — single canvas with stacked colour-coded section labels. */
-#overlay-stage { background:#000; }
-#overlay-host { width:100%; height:100%; touch-action:none; }
-#overlay-rot { transform-origin:50% 50%; }
-#overlay-canvas { display:block; width:100%; height:100%; }
-#overlay-labels { position:absolute; top:6px; left:6px; display:flex; flex-direction:column; gap:3px; z-index:5; pointer-events:auto; }
-#overlay-labels .ov-label { display:flex; align-items:center; gap:4px; padding:2px 8px; border-radius:3px; font-size:11px; color:#fff; cursor:pointer; user-select:none; }
-#overlay-labels .ov-label.active { outline:1.5px solid #fff; outline-offset:0; }
-#overlay-labels .ov-label:hover { filter:brightness(1.1); }
 #method-rows .marker-swatch { width:14px; height:14px; border-radius:50%; border:1px solid #cbd5e1; cursor:pointer; padding:0; vertical-align:middle; }
 #method-rows .marker-swatch:hover { border-color:#1d4ed8; }
 #method-rows .marker-input { width:0; height:0; opacity:0; pointer-events:none; position:absolute; }
@@ -180,10 +171,9 @@ body.splitting-v { cursor:row-resize !important; }
             <input id="project-name-input" type="text" class="text-xs border border-gray-300 rounded px-2 py-1 bg-white min-w-0 flex-1 max-w-[300px]" placeholder="Project name" />
         </div>
         <div class="flex items-center gap-2 shrink-0">
-            <div id="view-mode-toggle" class="flex items-center text-[11px] border border-gray-300 rounded overflow-hidden" title="Free: each section shows its own visible layers. Compound: every section displays the same focus compound side-by-side. Overlay: all sections are blended into a single canvas using section colours.">
+            <div id="view-mode-toggle" class="flex items-center text-[11px] border border-gray-300 rounded overflow-hidden" title="Compound mode focuses on a single MSI compound across all sections; Free shows every visible layer per section.">
                 <button data-mode="free" class="px-2 py-1 bg-white text-gray-700">Free</button>
                 <button data-mode="compound" class="px-2 py-1 bg-blue-600 text-white">Compound</button>
-                <button data-mode="overlay" class="px-2 py-1 bg-white text-gray-700">Overlay</button>
             </div>
             <button id="btn-new-project" class="btn">New</button>
             <button id="btn-import-zip" class="btn">Import ZIP</button>
@@ -293,14 +283,6 @@ body.splitting-v { cursor:row-resize !important; }
             </div>
             <div id="sections-grid" class="flex-1 min-h-0">
                 <!-- per-section panels are inserted here -->
-            </div>
-            <div id="overlay-stage" class="hidden flex-1 min-h-0 flex flex-col">
-                <div id="overlay-host" class="flex-1 relative bg-black overflow-hidden">
-                    <div id="overlay-rot" class="absolute inset-0">
-                        <canvas id="overlay-canvas"></canvas>
-                    </div>
-                    <div id="overlay-labels"></div>
-                </div>
             </div>
             <div id="sections-empty" class="empty-shell hidden">
                 <h2>Welcome to DESI Data Share</h2>
@@ -469,32 +451,6 @@ function formatRawForInput(v) {
 // Walk an existing project and synthesise compoundMeta for any MSI layer that
 // predates the metadata era. The synthesised record is tagged { legacy: true }
 // so the UI can offer a one-click clean-up later.
-
-// Palette assigned cyclically to sections so each appears with a distinct
-// colour in Overlay mode and the Section picker. Saturated, hue-distinct
-// hex codes — order matters (first section gets [0], etc.).
-const SECTION_COLOR_PALETTE = ['#3b82f6', '#10b981', '#ef4444', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
-
-function defaultSectionColor(ordinal) {
-    const i = Math.max(0, (Number(ordinal) || 1) - 1);
-    return SECTION_COLOR_PALETTE[i % SECTION_COLOR_PALETTE.length];
-}
-
-function backfillSectionColors(project) {
-    if (!project || !Array.isArray(project.sections)) return;
-    project.sections.forEach((sec, i) => {
-        if (!sec.meta) sec.meta = {};
-        if (!sec.meta.color) sec.meta.color = SECTION_COLOR_PALETTE[i % SECTION_COLOR_PALETTE.length];
-    });
-}
-
-function hexToRgb(hex) {
-    const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || ''));
-    if (!m) return [255, 255, 255];
-    const v = parseInt(m[1], 16);
-    return [(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff];
-}
-
 function backfillLegacyCompoundMeta(project) {
     if (!project || !Array.isArray(project.sections)) return;
     for (const sec of project.sections) {
@@ -1782,7 +1738,6 @@ class SectionPanel {
         App.queueSave();
         App.broadcastSync(edge === 'min' ? 'vmin' : 'vmax', parseFloat(rawValue), this);
         Toolbar.refreshRange();
-        if (App.viewMode === 'overlay') OverlayStage.render();
     }
 
     getOpacity() {
@@ -1804,7 +1759,6 @@ class SectionPanel {
         App.queueSave();
         App.broadcastSync('opacity', v, this);
         Toolbar.refreshOpacity();
-        if (App.viewMode === 'overlay') OverlayStage.render();
     }
 
     getRotation() {
@@ -1896,7 +1850,6 @@ class SectionPanel {
         // Toolbar.refreshRotation reads getRotation() back from this panel
         // when this section is active, so we don't write the input directly.
         if (App.activeSectionId === this.section.id) Toolbar.refreshRotation();
-        if (App.viewMode === 'overlay') OverlayStage.render();
     }
 
     // Drag (no modifier) translates the section content; wheel zooms it. ROI
@@ -3068,24 +3021,9 @@ const Wizards = {
     },
 
     async openMsiWizard(panel) {
-        // Register-to selector lets the user push the MSI into the current
-        // section or split it off as a brand-new section. The latter is the
-        // common path for multi-section comparisons in Overlay mode.
-        const sections = (App.project && App.project.sections) || [];
-        const sectionOpts = sections.map(s => {
-            const sel = (panel && panel.section.id === s.id) ? ' selected' : '';
-            const name = s.displayName || ('Section ' + (s.ordinal || ''));
-            return '<option value="' + s.id + '"' + sel + '>' + name + '</option>';
-        }).join('');
         const html = `
             <h2>Register MSI layer</h2>
             <form>
-              <label>Register to
-                <select name="register_target">
-                  ${sectionOpts}
-                  <option value="__new__">+ New section</option>
-                </select>
-              </label>
               <label>Source file (.xlsx or .txt)
                 <input type="file" name="src" accept=".xlsx,.xls,.txt" required>
               </label>
@@ -3310,20 +3248,6 @@ const Wizards = {
             try {
                 const r = await card._collect();
                 if (!r) { okBtn2.disabled = false; return; }
-                // Resolve the registration target. The user may have picked
-                // a different existing section, or asked to spawn a fresh one.
-                const targetSel = card.querySelector('[name="register_target"]');
-                const targetVal = targetSel ? targetSel.value : null;
-                if (targetVal === '__new__') {
-                    await App.addSection();
-                    const newSec = App.project.sections[App.project.sections.length - 1];
-                    panel = App.panels.get(newSec.id);
-                    App.setActiveSection(newSec.id);
-                } else if (targetVal && (!panel || panel.section.id !== targetVal)) {
-                    panel = App.panels.get(targetVal);
-                    if (panel) App.setActiveSection(targetVal);
-                }
-                if (!panel) { err.textContent = '対象切片が見つかりません'; okBtn2.disabled = false; return; }
                 if (r.kind === 'xlsx') {
                     const sourceFileId = uid('msifile');
                     let sharedBlobId = null;
@@ -3756,29 +3680,6 @@ const Toolbar = {
                 const panel = App.panels.get(s.id);
                 const row = document.createElement('div');
                 row.className = 'picker-row' + (s.id === activeId ? ' active' : '');
-                // Colour swatch — clicking it opens a colour picker bound to
-                // section.meta.color, so users can recolour Overlay layers
-                // without leaving the toolbar.
-                const dot = document.createElement('span');
-                const sectionColor = (s.meta && s.meta.color) || defaultSectionColor(s.ordinal || 1);
-                dot.className = 'picker-row-dot';
-                dot.style.cssText = 'width:12px;height:12px;border-radius:50%;flex-shrink:0;background:' + sectionColor + ';border:1px solid #cbd5e1;cursor:pointer;';
-                dot.title = 'Change section colour';
-                const colorInput = document.createElement('input');
-                colorInput.type = 'color';
-                colorInput.value = sectionColor;
-                colorInput.style.cssText = 'position:absolute;width:0;height:0;opacity:0;pointer-events:none;';
-                dot.appendChild(colorInput);
-                dot.addEventListener('click', (ev) => { ev.stopPropagation(); colorInput.click(); });
-                colorInput.addEventListener('input', (ev) => {
-                    if (!s.meta) s.meta = {};
-                    s.meta.color = ev.target.value;
-                    dot.style.background = s.meta.color;
-                    App.queueSave();
-                    if (App.viewMode === 'overlay') OverlayStage.render();
-                });
-                row.appendChild(dot);
-
                 const tc = document.createElement('canvas');
                 tc.width = 32; tc.height = 32;
                 this._drawThumbInto(tc, panel);
@@ -3787,28 +3688,6 @@ const Toolbar = {
                 nm.className = 'picker-row-name';
                 nm.textContent = s.displayName || ('Section ' + (s.ordinal || ''));
                 row.appendChild(nm);
-
-                // Pencil icon — quick rename of the section. Uses prompt() to
-                // stay dependency-free; canvas labels and overlay stage labels
-                // re-render automatically through Toolbar.refreshSectionPicker.
-                const ren = document.createElement('span');
-                ren.textContent = '✎';
-                ren.title = 'Rename section';
-                ren.style.cssText = 'margin-left:auto;color:#94a3b8;cursor:pointer;font-size:12px;';
-                ren.addEventListener('click', (ev) => {
-                    ev.stopPropagation();
-                    const next = prompt('Section name', s.displayName || ('Section ' + (s.ordinal || '')));
-                    if (next == null) return;
-                    s.displayName = next.trim() || ('Section ' + (s.ordinal || ''));
-                    App.queueSave();
-                    Toolbar.refreshSectionPicker();
-                    const p = App.panels.get(s.id);
-                    if (p && p._labelEl) p._labelEl.textContent = s.displayName;
-                    if (App.viewMode === 'overlay') OverlayStage.refreshLabels();
-                    App.refreshAnalysisScope();
-                });
-                row.appendChild(ren);
-
                 row.addEventListener('click', () => {
                     App.setActiveSection(s.id);
                     this.closePickerMenu();
@@ -3875,187 +3754,6 @@ const Toolbar = {
         this.refreshRange();
         this.refreshOpacity();
         this.refreshRotation();
-    },
-};
-
-// =============================================================
-// Overlay stage — a single canvas that blends every section's
-// focus compound into one image, tinted by the section colour.
-// Lives next to the per-section grid; Free/Compound modes hide
-// it, Overlay mode hides the grid and shows this instead.
-// =============================================================
-const OverlayStage = {
-    host: null, rot: null, canvas: null, labels: null,
-    _wired: false, _resizeObserver: null,
-
-    init() {
-        if (this._wired) return;
-        this._wired = true;
-        this.host = document.getElementById('overlay-host');
-        this.rot = document.getElementById('overlay-rot');
-        this.canvas = document.getElementById('overlay-canvas');
-        this.labels = document.getElementById('overlay-labels');
-        if (!this.host) return;
-
-        if (typeof ResizeObserver !== 'undefined') {
-            let raf = 0;
-            this._resizeObserver = new ResizeObserver(() => {
-                if (raf) cancelAnimationFrame(raf);
-                raf = requestAnimationFrame(() => { raf = 0; this._resizeCanvas(); this.render(); });
-            });
-            this._resizeObserver.observe(this.host);
-        }
-
-        // Drag the active section. Sync flag pushes the value out as usual.
-        let dragging = false, sx = 0, sy = 0, btx = 0, bty = 0;
-        this.host.addEventListener('pointerdown', (ev) => {
-            if (ev.button !== 0) return;
-            if (App.drawing && App.drawing.mode) return;
-            const p = App.activeSectionId ? App.panels.get(App.activeSectionId) : null;
-            if (!p) return;
-            const t = p._ensureViewerTransform();
-            dragging = true;
-            sx = ev.clientX; sy = ev.clientY; btx = t.tx; bty = t.ty;
-            this.host.setPointerCapture(ev.pointerId);
-            this.host.style.cursor = 'grabbing';
-        });
-        this.host.addEventListener('pointermove', (ev) => {
-            if (!dragging) return;
-            const p = App.activeSectionId ? App.panels.get(App.activeSectionId) : null;
-            if (!p) return;
-            const t = p._ensureViewerTransform();
-            t.tx = btx + (ev.clientX - sx);
-            t.ty = bty + (ev.clientY - sy);
-            this.render();
-        });
-        const endDrag = (ev) => {
-            if (!dragging) return;
-            dragging = false;
-            try { this.host.releasePointerCapture(ev.pointerId); } catch (e) {}
-            this.host.style.cursor = '';
-            App.queueSave();
-        };
-        this.host.addEventListener('pointerup', endDrag);
-        this.host.addEventListener('pointercancel', endDrag);
-
-        this.host.addEventListener('wheel', (ev) => {
-            if (App.drawing && App.drawing.mode) return;
-            const p = App.activeSectionId ? App.panels.get(App.activeSectionId) : null;
-            if (!p) return;
-            ev.preventDefault();
-            const t = p._ensureViewerTransform();
-            const factor = Math.exp(-ev.deltaY * 0.001);
-            t.scale = Math.max(0.2, Math.min(5, t.scale * factor));
-            this.render();
-            App.queueSave();
-        }, { passive: false });
-    },
-
-    _resizeCanvas() {
-        if (!this.host || !this.canvas) return;
-        const dpr = window.devicePixelRatio || 1;
-        const rect = this.host.getBoundingClientRect();
-        const w = Math.max(1, Math.floor(rect.width));
-        const h = Math.max(1, Math.floor(rect.height));
-        this.canvas.width = Math.floor(w * dpr);
-        this.canvas.height = Math.floor(h * dpr);
-        this.canvas.style.width = w + 'px';
-        this.canvas.style.height = h + 'px';
-        const ctx = this.canvas.getContext('2d');
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    },
-
-    // Tint a Plasma-coloured MSI bitmap into a section-coloured layer:
-    // luminance acts as alpha, the constant section colour fills the RGB
-    // channels. The result composites cleanly with other sections under
-    // 'lighter' so overlapping bright regions reveal mixed colours.
-    _tintToSectionColor(srcImg, hex, settings) {
-        const tc = document.createElement('canvas');
-        tc.width = srcImg.naturalWidth; tc.height = srcImg.naturalHeight;
-        const tctx = tc.getContext('2d', { willReadFrequently: true });
-        tctx.drawImage(srcImg, 0, 0);
-        const data = tctx.getImageData(0, 0, tc.width, tc.height);
-        const d = data.data;
-        const [tr, tg, tb] = hexToRgb(hex);
-        const vmin = settings ? settings.vmin : 0;
-        const vmax = settings ? settings.vmax : 255;
-        const range = (vmax - vmin) || 1;
-        for (let i = 0; i < d.length; i += 4) {
-            if (d[i + 3] === 0) { d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; continue; }
-            const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-            const n = Math.max(0, Math.min(1, (lum - vmin) / range));
-            const a = Math.round(n * 255);
-            d[i] = Math.round(tr * n);
-            d[i + 1] = Math.round(tg * n);
-            d[i + 2] = Math.round(tb * n);
-            d[i + 3] = a;
-        }
-        tctx.putImageData(data, 0, 0);
-        return tc;
-    },
-
-    render() {
-        if (!App.project || !this.canvas || !this.host) return;
-        if (App.viewMode !== 'overlay') return;
-        if (!this.canvas.width || !this.canvas.height) this._resizeCanvas();
-        const ctx = this.canvas.getContext('2d');
-        const cssW = this.canvas.width / (window.devicePixelRatio || 1);
-        const cssH = this.canvas.height / (window.devicePixelRatio || 1);
-        ctx.clearRect(0, 0, cssW, cssH);
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, cssW, cssH);
-
-        const focusKey = App.focusCompoundKey;
-        if (!focusKey) { this.refreshLabels(); return; }
-
-        ctx.globalCompositeOperation = 'lighter';
-
-        for (const sec of App.project.sections) {
-            const panel = App.panels.get(sec.id);
-            if (!panel) continue;
-            const img = panel.imageSources && panel.imageSources[focusKey];
-            const settings = panel.imageSettings && panel.imageSettings[focusKey];
-            if (!img || !img.complete || img.naturalWidth === 0 || !settings) continue;
-            const color = (sec.meta && sec.meta.color) || defaultSectionColor(sec.ordinal || 1);
-            const tinted = this._tintToSectionColor(img, color, settings);
-
-            const t = panel._ensureViewerTransform();
-            ctx.save();
-            ctx.globalAlpha = settings.opacity != null ? settings.opacity : 1;
-            // Translate to centre, apply per-section transform, then draw the
-            // bitmap centred. The 90-degree base rotation matches what each
-            // SectionPanel.viewer-rot applies via CSS.
-            ctx.translate(cssW / 2 + (t.tx || 0), cssH / 2 + (t.ty || 0));
-            ctx.rotate(((t.rot || 0) - 90) * Math.PI / 180);
-            ctx.scale(t.scale || 1, t.scale || 1);
-            // Fit the source image into the available area while preserving
-            // aspect ratio. We fit the rotated bitmap (swap width/height for
-            // the -90deg base rotation).
-            const srcW = img.naturalWidth, srcH = img.naturalHeight;
-            const maxFit = Math.min(cssH / srcW, cssW / srcH) * 0.95;
-            const drawScale = maxFit > 0 ? maxFit : 1;
-            ctx.drawImage(tinted, -srcW * drawScale / 2, -srcH * drawScale / 2, srcW * drawScale, srcH * drawScale);
-            ctx.restore();
-        }
-
-        ctx.globalCompositeOperation = 'source-over';
-        this.refreshLabels();
-    },
-
-    refreshLabels() {
-        if (!this.labels) return;
-        this.labels.innerHTML = '';
-        if (!App.project) return;
-        for (const sec of App.project.sections) {
-            const color = (sec.meta && sec.meta.color) || defaultSectionColor(sec.ordinal || 1);
-            const el = document.createElement('div');
-            el.className = 'ov-label' + (sec.id === App.activeSectionId ? ' active' : '');
-            el.style.background = color;
-            el.textContent = sec.displayName || ('Section ' + (sec.ordinal || ''));
-            el.title = 'Click to make this the active section';
-            el.addEventListener('click', () => App.setActiveSection(sec.id));
-            this.labels.appendChild(el);
-        }
     },
 };
 
@@ -4133,35 +3831,18 @@ const App = {
     focusCompoundKey: null,
 
     setViewMode(mode) {
-        const m = (mode === 'free' || mode === 'overlay') ? mode : 'compound';
+        const m = (mode === 'free') ? 'free' : 'compound';
         if (this.viewMode === m) return;
         this.viewMode = m;
         try { localStorage.setItem('desi:viewMode', m); } catch (e) {}
         this.refreshViewModeUI();
-        this.applyViewModeLayout();
         for (const p of this.panels.values()) {
             try {
                 p.renderComposite();
                 p.refreshActiveOutline && p.refreshActiveOutline();
             } catch (e) {}
         }
-        if (m === 'overlay') OverlayStage.render();
         Toolbar.refreshAll();
-    },
-
-    // Show/hide the grid vs overlay containers based on viewMode. Called from
-    // setViewMode and on initial load so the right one is visible from the
-    // first paint without flicker.
-    applyViewModeLayout() {
-        const grid = document.getElementById('sections-grid');
-        const stage = document.getElementById('overlay-stage');
-        if (this.viewMode === 'overlay') {
-            if (grid) grid.classList.add('hidden');
-            if (stage) stage.classList.remove('hidden');
-        } else {
-            if (grid) grid.classList.remove('hidden');
-            if (stage) stage.classList.add('hidden');
-        }
     },
 
     setFocusCompoundKey(key) {
@@ -4170,7 +3851,6 @@ const App = {
         for (const p of this.panels.values()) {
             try { p.renderComposite(); } catch (e) {}
         }
-        if (this.viewMode === 'overlay') OverlayStage.render();
         renderMethodTable();
         Toolbar.refreshAll();
     },
@@ -4185,7 +3865,6 @@ const App = {
             btn.classList.toggle('bg-white', !on);
             btn.classList.toggle('text-gray-700', !on);
         });
-        this.applyViewModeLayout();
     },
 
     loadSyncFlags() {
@@ -4224,11 +3903,10 @@ const App = {
         await ProjectStorage.open();
         setupSplitters();
         Toolbar.init();
-        OverlayStage.init();
         this.loadSyncFlags();
         try {
             const m = localStorage.getItem('desi:viewMode');
-            if (m === 'free' || m === 'compound' || m === 'overlay') this.viewMode = m;
+            if (m === 'free' || m === 'compound') this.viewMode = m;
             const f = localStorage.getItem('desi:focusCompoundKey');
             if (f) this.focusCompoundKey = f;
         } catch (e) {}
@@ -4287,7 +3965,6 @@ const App = {
         this.project.roiHidden = this.project.roiHidden || {};
         this.project.memo = ensureMemoShape(this.project.memo);
         backfillLegacyCompoundMeta(this.project);
-        backfillSectionColors(this.project);
         localStorage.setItem('desi:lastProjectId', id);
         document.getElementById('project-name-input').value = project.displayName || '';
         document.getElementById('sections-empty').classList.toggle('hidden', this.project.sections.length > 0);
@@ -4315,8 +3992,6 @@ const App = {
         renderMemoForm();
         await this.refreshProjectPicker();
         this.renderAnalysis();
-        this.applyViewModeLayout();
-        if (this.viewMode === 'overlay') OverlayStage.render();
     },
 
     async createNewProject(name) {
@@ -4354,7 +4029,7 @@ const App = {
             id: uid('sec'),
             ordinal: ord,
             displayName: 'Section ' + ord,
-            meta: { specimen: {}, world_coords: {}, color: defaultSectionColor(ord) },
+            meta: { specimen: {}, world_coords: {} },
             images: {},
             msiSeries: {},
         };
@@ -4414,7 +4089,6 @@ const App = {
         this.panels.forEach(p => p.setActive(p.section.id === id));
         renderMethodTable();
         Toolbar.refreshAll();
-        if (this.viewMode === 'overlay') OverlayStage.refreshLabels();
     },
 
     refreshAnalysisScope() {
