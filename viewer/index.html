@@ -37,7 +37,7 @@ body { font-family: 'Inter', sans-serif; background-color: #f4f4f5; }
 .section-panel header .sec-actions { display:flex; gap:4px; flex-wrap:wrap; }
 .section-panel header .icon-btn { font-size:11px; padding:2px 6px; border:1px solid #d1d5db; border-radius:3px; background:#fff; cursor:pointer; color:#475569; }
 .section-panel header .icon-btn:hover { background:#eef2ff; color:#1d4ed8; }
-.section-panel .viewer-host { position:relative; flex:1 1 auto; min-height:160px; background:#000; }
+.section-panel .viewer-host { position:relative; flex:1 1 auto; min-height:320px; background:#000; }
 .section-panel .viewer-rot { position:absolute; inset:0; transform-origin:50% 50%; transform:rotate(-90deg); }
 .section-panel canvas.disp { position:absolute; }
 .section-panel canvas.roi { position:absolute; pointer-events:none; }
@@ -57,7 +57,14 @@ body { font-family: 'Inter', sans-serif; background-color: #f4f4f5; }
 .section-panel .layer-chip .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
 .section-panel .layer-chip .gear { color:#64748b; }
 .section-panel .layer-chip .gear:hover { color:#1d4ed8; }
-.section-panel .thumb-row { display:grid; gap:4px; grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); padding:4px 6px 6px 6px; }
+.section-panel .thumb-row { padding:4px 6px 6px 6px; max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
+.section-panel .thumb-file-group { border:1px solid #e5e7eb; border-radius:4px; padding:2px 4px; }
+.section-panel .thumb-file-group > summary { cursor:pointer; font-size:11px; color:#334155; display:flex; align-items:center; gap:4px; user-select:none; outline:none; padding:1px 2px; }
+.section-panel .thumb-file-group > summary::-webkit-details-marker { display:none; }
+.section-panel .thumb-file-group > summary::before { content:'▶'; font-size:9px; color:#64748b; transition:transform 0.15s; }
+.section-panel .thumb-file-group[open] > summary::before { transform:rotate(90deg); }
+.section-panel .thumb-file-group .file-name { font-weight:600; color:#0f172a; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.section-panel .thumb-grid { display:grid; gap:4px; grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); padding:4px 0 2px 0; }
 .section-panel .thumb-cell { display:flex; flex-direction:column; align-items:center; min-width:0; }
 .section-panel .thumb-rot-box { position:relative; width:100%; aspect-ratio:var(--rot-ar, 1/1); max-height:90px; overflow:hidden; background:#0b1220; border-radius:3px; cursor:pointer; }
 .section-panel .thumb-rot-box img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; transform-origin:50% 50%; }
@@ -1261,7 +1268,7 @@ class SectionPanel {
             x.title = 'Remove this layer';
             x.addEventListener('click', (ev) => { ev.stopPropagation(); this.removeLayer(key); });
             chip.appendChild(x);
-            chip.addEventListener('click', () => this.toggleLayer(key));
+            chip.addEventListener('click', (ev) => this.handleLayerClick(key, ev));
             return chip;
         };
 
@@ -1337,6 +1344,21 @@ class SectionPanel {
     toggleLayer(key, force) {
         const want = (force === undefined) ? !this.visibleLayers.has(key) : !!force;
         if (want) this.visibleLayers.add(key); else this.visibleLayers.delete(key);
+        this.rebuildLayerBar();
+        this.renderComposite();
+        this.drawAllRois();
+        this.refreshThumbHighlights();
+    }
+
+    // User-driven layer click: bare click = solo (show only this), modifier = additive toggle.
+    handleLayerClick(key, ev) {
+        const additive = !!(ev && (ev.shiftKey || ev.ctrlKey || ev.metaKey));
+        if (additive) {
+            this.toggleLayer(key);
+            return;
+        }
+        this.visibleLayers.clear();
+        this.visibleLayers.add(key);
         this.rebuildLayerBar();
         this.renderComposite();
         this.drawAllRois();
@@ -1423,22 +1445,42 @@ class SectionPanel {
         this.msiThumbRefs.clear();
         const allKeys = Object.keys(this.imageSources);
         if (!allKeys.length) return;
+
+        // Mirror the layer-bar grouping: HE/IF first, then each MSI source file,
+        // then a fallback "(legacy MSI)" bucket for keys without sourceFileId.
+        const buckets = new Map(); // bucketKey -> { label, keys: [] }
+        const ensure = (id, label) => { if (!buckets.has(id)) buckets.set(id, { label, keys: [] }); return buckets.get(id); };
         const heKeys = allKeys.filter(k => /HE_STAIN/i.test(k));
         const ifKeys = allKeys.filter(k => /IF_STAIN/i.test(k));
-        const msiKeys = allKeys.filter(k => /^MSI_/i.test(k)).sort();
-        const ordered = heKeys.concat(ifKeys).concat(msiKeys);
-        const others  = allKeys.filter(k => !ordered.includes(k));
-        const finalKeys = ordered.concat(others);
-        for (const key of finalKeys) {
+        if (heKeys.length || ifKeys.length) {
+            const g = ensure('__images__', 'HE / IF');
+            for (const k of heKeys) g.keys.push(k);
+            for (const k of ifKeys) g.keys.push(k);
+        }
+        for (const k of allKeys) {
+            if (!/^MSI_/i.test(k)) continue;
+            const ent = (this.section.msiSeries || {})[k];
+            const fid = ent && ent.sourceFileId;
+            if (fid) {
+                const file = (this.section.msiFiles || {})[fid];
+                ensure(fid, (file && file.filename) || '(file)').keys.push(k);
+            } else {
+                ensure('__legacy__', '(legacy MSI)').keys.push(k);
+            }
+        }
+        for (const k of allKeys) {
+            if (heKeys.includes(k) || ifKeys.includes(k) || /^MSI_/i.test(k)) continue;
+            ensure('__other__', 'Other').keys.push(k);
+        }
+
+        const mkCell = (key) => {
             const cell = document.createElement('div');
             cell.className = 'thumb-cell';
-
             const box = document.createElement('div');
             box.className = 'thumb-rot-box';
             if (this.visibleLayers.has(key)) box.classList.add('active');
             box.dataset.key = key;
-            box.addEventListener('click', () => this.toggleLayer(key));
-
+            box.addEventListener('click', (ev) => this.handleLayerClick(key, ev));
             const im = document.createElement('img');
             im.alt = formatDisplayName(key);
             im.src = this.imageDataUrls[key];
@@ -1452,19 +1494,42 @@ class SectionPanel {
             else im.addEventListener('load', applyAr, { once: true });
             box.appendChild(im);
             cell.appendChild(box);
-
             const cap = document.createElement('div');
             cap.className = 'thumb-cap';
-            cap.textContent = formatDisplayName(key);
+            const ent = (this.section.msiSeries || {})[key];
+            const meta = ent && ent.compoundMeta;
+            cap.textContent = (meta && meta.base) || formatDisplayName(key);
+            cap.title = formatDisplayName(key);
             cell.appendChild(cap);
-            host.appendChild(cell);
-
             if (isMsi) {
                 this.msiThumbRefs.set(key, im);
                 const onLoad = () => { im.removeEventListener('load', onLoad); this.renderMsiThumbnail(key); };
                 if (im.complete && im.naturalWidth) this.renderMsiThumbnail(key);
                 else im.addEventListener('load', onLoad);
             }
+            return cell;
+        };
+
+        for (const [, group] of buckets) {
+            const det = document.createElement('details');
+            det.className = 'thumb-file-group';
+            det.open = true;
+            const sum = document.createElement('summary');
+            const fname = document.createElement('span');
+            fname.className = 'file-name';
+            fname.textContent = group.label;
+            fname.title = group.label;
+            sum.appendChild(fname);
+            const counter = document.createElement('span');
+            counter.style.cssText = 'color:#64748b;font-size:10px;';
+            counter.textContent = '(' + group.keys.length + ')';
+            sum.appendChild(counter);
+            det.appendChild(sum);
+            const grid = document.createElement('div');
+            grid.className = 'thumb-grid';
+            for (const k of group.keys) grid.appendChild(mkCell(k));
+            det.appendChild(grid);
+            host.appendChild(det);
         }
     }
 
