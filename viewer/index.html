@@ -547,25 +547,76 @@ async function inspectXlsxColumns(buf, sheetName, headerRow1based) {
     return { sheetNames: wb.SheetNames, headers, dataRows: Math.max(0, range.e.r - hr) };
 }
 
+// Parse an Analyte (converted from imzML) txt header.
+// File layout (tab-separated):
+//   line 0: "<count>\t\t\t<compound1>\t<compound2>\t...\t<compoundN>\t..."
+//   line 1: "\t\t\t1\t2\t...\tN\t..."
+//   line 2: "\t\t\t<precursor1>\t<precursor2>\t...\t<precursorN>\t..."
+//   line 3: "\t\t\t<product1>\t<product2>\t...\t<productN>\t..."
+//   line 4+: "<idx>\t<x>\t<y>\t<v1>\t<v2>\t...\t<vN>\t<extra>\t<extra>"
+// Returns { compounds: [{ index, name, precursor, product }], dataStartLine: 4 }.
+function parseAnalyteHeader(buf) {
+    const raw = (typeof buf === 'string') ? buf : new TextDecoder('utf-8').decode(buf);
+    const linesAll = raw.split(/\r?\n/);
+    if (linesAll.length < 5) throw new Error('Analyte file too short');
+    if (!/^\s*Analyte\s*\(converted from imzML\)/i.test(linesAll[0]) &&
+        !/Analyte/i.test(linesAll[0])) {
+        // Treat as Analyte anyway if structure matches; otherwise the caller should fall back.
+    }
+    const split = (s) => (s == null ? [] : String(s).split('\t'));
+    const headerRow = split(linesAll[0]);
+    const precRow   = split(linesAll[2]);
+    const prodRow   = split(linesAll[3]);
+    // Compound names live at column 3+ (skipping the leading idx,x,y placeholder slots).
+    const rawNames  = headerRow.slice(3);
+    const rawPrec   = precRow.slice(3);
+    const rawProd   = prodRow.slice(3);
+    const N = rawPrec.filter(s => Number.isFinite(Number(s))).length;
+    if (!N) throw new Error('no precursor m/z values found on line 3');
+    const compounds = [];
+    for (let i = 0; i < N; i++) {
+        let name = (rawNames[i] || '').trim();
+        if (!name) name = 'Compound' + (i + 1);
+        const precursor = Number(rawPrec[i]);
+        const product   = Number(rawProd[i]);
+        compounds.push({
+            index: i,
+            name,
+            precursor: Number.isFinite(precursor) ? precursor : null,
+            product:   Number.isFinite(product) ? product : null,
+        });
+    }
+    return { compounds, dataStartLine: 4 };
+}
+
 async function buildPngFromTxtArrayBuffer(buf, def) {
     const raw = new TextDecoder('utf-8').decode(buf);
     const linesAll = raw.split(/\r?\n/);
-    const lines = linesAll.filter(s => s.trim().length > 0);
-    if (lines.length < 1) throw new Error('empty txt');
-    const isAnalyte = /^\s*Analyte\s*\(converted from imzML\)\s*$/i.test(lines[0]);
+    if (linesAll.length < 1) throw new Error('empty txt');
+    const isAnalyte = /Analyte\s*\(converted from imzML\)/i.test(linesAll[0] || '');
     const rows = [];
-    if (isAnalyte) {
-        if (lines.length < 5) throw new Error('Analyte format too short');
-        const precs = lines[2].trim().split(/\s+/).map(Number).filter(Number.isFinite);
-        let valueColIndex = 3 + (Number.isFinite(def.v_index) ? def.v_index : 0);
-        for (let i = 4; i < lines.length; i++) {
-            const tok = lines[i].trim().split(/\s+/).map(Number);
-            if (tok.length >= 4 && tok.slice(0, 4).every(Number.isFinite)) {
-                if (valueColIndex >= tok.length) continue;
-                rows.push({ x: tok[1], y: tok[2], v: tok[valueColIndex] });
-            }
+    if (isAnalyte || def.kind === 'txt-analyte' || Number.isFinite(def.compound_index) || Number.isFinite(def.v_index)) {
+        if (linesAll.length < 5) throw new Error('Analyte format too short');
+        const compoundIndex = Number.isFinite(def.compound_index)
+            ? def.compound_index
+            : (Number.isFinite(def.v_index) ? def.v_index : 0);
+        const valueColIndex = 3 + compoundIndex;
+        const dataStart = Number.isFinite(def.dataStartLine) ? def.dataStartLine : 4;
+        for (let i = dataStart; i < linesAll.length; i++) {
+            const line = linesAll[i];
+            if (!line || !line.trim()) continue;
+            const tok = line.split('\t').map(s => Number(s));
+            if (tok.length < 4) continue;
+            if (!Number.isFinite(tok[1]) || !Number.isFinite(tok[2])) continue;
+            if (valueColIndex >= tok.length) continue;
+            const v = tok[valueColIndex];
+            if (!Number.isFinite(v)) continue;
+            rows.push({ x: tok[1], y: tok[2], v });
         }
     } else {
+        // Generic TSV/CSV: first non-empty line is the header
+        const lines = linesAll.filter(s => s.trim().length > 0);
+        if (!lines.length) throw new Error('empty txt');
         const rawHeader = lines[0];
         const sep = rawHeader.includes('\t') ? '\t' : (rawHeader.includes(',') ? ',' : 'ws');
         const splitBy = (s) => sep === 'ws' ? s.trim().split(/\s+/) : s.split(sep);
@@ -1701,12 +1752,22 @@ const Wizards = {
                 </label>
               </div>
               <div data-txt-area class="hidden">
-                <label>Layer name
-                  <input type="text" name="txt_layer" placeholder="MSI_DA">
-                </label>
-                <label>Value column index (0-based, for Analyte format)
-                  <input type="number" name="txt_v_index" value="0" min="0">
-                </label>
+                <div class="text-[11px] text-gray-500 mt-1" data-txt-help>
+                  Analyte 形式の txt を選ぶと、ファイル先頭から化合物名を自動抽出して一覧表示します。
+                  チェックを入れた行が個別レイヤーとして登録されます。
+                </div>
+                <div class="flex items-center justify-between mt-2 mb-1" data-txt-tools style="display:none;">
+                  <span class="text-[11px] text-gray-600" data-txt-summary></span>
+                  <div class="flex gap-1">
+                    <button type="button" class="btn" data-txt-all style="padding:2px 8px;font-size:11px;">全選択</button>
+                    <button type="button" class="btn" data-txt-none style="padding:2px 8px;font-size:11px;">全解除</button>
+                  </div>
+                </div>
+                <div data-txt-list style="max-height:260px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:4px;"></div>
+                <div data-txt-fallback class="hidden text-[11px] text-amber-700 mt-2">
+                  Analyte 形式として認識できなかったため、汎用 TSV/CSV として読み込みます。
+                  ヘッダ列名から x / y / v 列を自動推定します。
+                </div>
               </div>
               <p class="err" data-err></p>
               <div class="actions">
@@ -1720,8 +1781,47 @@ const Wizards = {
         const srcInp = card.querySelector('[name="src"]');
         const xlsxArea = card.querySelector('[data-xlsx-area]');
         const txtArea = card.querySelector('[data-txt-area]');
+        const txtList = card.querySelector('[data-txt-list]');
+        const txtTools = card.querySelector('[data-txt-tools]');
+        const txtFallback = card.querySelector('[data-txt-fallback]');
+        const txtSummary = card.querySelector('[data-txt-summary]');
         let bufCache = null;
         let kindCache = null;
+        let analyteCache = null;   // { compounds, dataStartLine } when Analyte; null when generic txt
+
+        const buildAnalyteList = () => {
+            txtList.innerHTML = '';
+            if (!analyteCache) return;
+            for (const c of analyteCache.compounds) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid #f1f5f9;font-size:11px;';
+                row.dataset.idx = c.index;
+                const chk = document.createElement('input');
+                chk.type = 'checkbox';
+                chk.checked = true;
+                chk.className = 'analyte-chk';
+                row.appendChild(chk);
+                const num = document.createElement('span');
+                num.style.cssText = 'min-width:24px;color:#64748b;text-align:right;';
+                num.textContent = String(c.index + 1);
+                row.appendChild(num);
+                const mz = document.createElement('span');
+                mz.style.cssText = 'min-width:120px;color:#475569;font-family:ui-monospace,monospace;';
+                const pre = (c.precursor != null) ? c.precursor.toFixed(2) : '?';
+                const pro = (c.product   != null) ? c.product.toFixed(2)   : '?';
+                mz.textContent = pre + ' → ' + pro;
+                row.appendChild(mz);
+                const name = document.createElement('input');
+                name.type = 'text';
+                name.value = 'MSI_' + sanitizeCompoundName(c.name);
+                name.className = 'analyte-name';
+                name.style.cssText = 'flex:1;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;';
+                row.appendChild(name);
+                txtList.appendChild(row);
+            }
+            txtTools.style.display = '';
+            txtSummary.textContent = '検出: ' + analyteCache.compounds.length + ' 化合物';
+        };
 
         const loadColumns = async () => {
             err.textContent = '';
@@ -1732,8 +1832,18 @@ const Wizards = {
             xlsxArea.classList.toggle('hidden', !isXlsx);
             txtArea.classList.toggle('hidden', isXlsx);
             if (!isXlsx) {
-                const sug = f.name.replace(/\.txt$/i, '');
-                card.querySelector('[name="txt_layer"]').value = 'MSI_' + sug;
+                bufCache = await readFileAsArrayBuffer(f);
+                analyteCache = null;
+                txtList.innerHTML = '';
+                txtTools.style.display = 'none';
+                txtFallback.classList.add('hidden');
+                try {
+                    analyteCache = parseAnalyteHeader(bufCache);
+                    buildAnalyteList();
+                } catch (e) {
+                    txtFallback.classList.remove('hidden');
+                    txtFallback.textContent = 'Analyte 形式として認識できませんでした (' + (e.message || e) + ')。汎用 TSV/CSV として読み込みます。';
+                }
                 return;
             }
             bufCache = await readFileAsArrayBuffer(f);
@@ -1743,6 +1853,15 @@ const Wizards = {
             sheetSel.value = wb.SheetNames.includes('MSI_Data') ? 'MSI_Data' : wb.SheetNames[0];
             await refreshColumns();
         };
+
+        card.querySelector('[data-txt-all]')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            txtList.querySelectorAll('.analyte-chk').forEach(c => c.checked = true);
+        });
+        card.querySelector('[data-txt-none]')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            txtList.querySelectorAll('.analyte-chk').forEach(c => c.checked = false);
+        });
 
         const refreshColumns = async () => {
             if (!bufCache) return;
@@ -1799,12 +1918,25 @@ const Wizards = {
                 const picks = Array.from(vSel.selectedOptions).filter(o => !o.disabled);
                 if (!picks.length) { err.textContent = 'Pick at least one intensity column'; return false; }
                 return { kind: 'xlsx', file: f, picks: picks.map(o => ({ col: o.value, name: o.textContent.split('—')[1].trim() })), sheet, data_start_row, col_x, col_y };
-            } else {
-                const layer = (card.querySelector('[name="txt_layer"]').value || '').trim();
-                if (!layer) { err.textContent = 'Layer name is required'; return false; }
-                const v_index = parseInt(card.querySelector('[name="txt_v_index"]').value) || 0;
-                return { kind: 'txt', file: f, layer, v_index };
             }
+            // txt
+            if (analyteCache && analyteCache.compounds.length) {
+                const rows = txtList.querySelectorAll('[data-idx]');
+                const picks = [];
+                rows.forEach(row => {
+                    const chk = row.querySelector('.analyte-chk');
+                    if (!chk || !chk.checked) return;
+                    const idx = parseInt(row.dataset.idx, 10);
+                    const nameInput = row.querySelector('.analyte-name');
+                    const layer = (nameInput.value || '').trim() || ('MSI_Compound' + (idx + 1));
+                    picks.push({ index: idx, layer });
+                });
+                if (!picks.length) { err.textContent = 'チェックされた化合物がありません'; return false; }
+                return { kind: 'txt-analyte', file: f, picks, dataStartLine: analyteCache.dataStartLine };
+            }
+            // generic TSV/CSV fallback (header from line 0)
+            const baseName = f.name.replace(/\.[^.]+$/, '');
+            return { kind: 'txt-generic', file: f, layer: 'MSI_' + sanitizeCompoundName(baseName) };
         };
 
         // override modal-ok behavior to handle async _collect
@@ -1829,8 +1961,18 @@ const Wizards = {
                         });
                     }
                     showToast('Registered ' + r.picks.length + ' MSI layer(s)');
+                } else if (r.kind === 'txt-analyte') {
+                    for (const pick of r.picks) {
+                        const layerKey = 'MSI_' + sanitizeCompoundName(pick.layer.replace(/^MSI_/, ''));
+                        await panel.addMsiLayer(layerKey, r.file, {
+                            kind: 'txt',
+                            compound_index: pick.index,
+                            dataStartLine: r.dataStartLine,
+                        });
+                    }
+                    showToast('Registered ' + r.picks.length + ' MSI layer(s)');
                 } else {
-                    await panel.addMsiLayer(r.layer, r.file, { kind: 'txt', v_index: r.v_index });
+                    await panel.addMsiLayer(r.layer, r.file, { kind: 'txt' });
                     showToast('Registered: ' + r.layer);
                 }
                 card._close(true);
@@ -1846,9 +1988,10 @@ const Wizards = {
 
 function sanitizeCompoundName(label) {
     if (!label) return 'X';
-    let s = String(label).trim().replace(/\s+/g, '_');
-    s = s.replace(/[^A-Za-z0-9_\-+@.]/g, '_');
-    return s;
+    // Remove tabs/newlines and collapse spaces, but otherwise preserve the original
+    // characters (so names like "Oxylipin_13-HODE_NEG_45_14" or "5-HT@CV30" stay intact).
+    let s = String(label).replace(/[\t\r\n]+/g, ' ').trim().replace(/\s+/g, '_');
+    return s || 'X';
 }
 
 // =============================================================
