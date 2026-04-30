@@ -37,6 +37,11 @@ body { font-family: 'Inter', sans-serif; background-color: #f4f4f5; }
 .section-panel header .sec-actions { display:flex; gap:4px; flex-wrap:wrap; }
 .section-panel header .icon-btn { font-size:11px; padding:2px 6px; border:1px solid #d1d5db; border-radius:3px; background:#fff; cursor:pointer; color:#475569; }
 .section-panel header .icon-btn:hover { background:#eef2ff; color:#1d4ed8; }
+.section-panel .sec-range { display:flex; align-items:center; gap:3px; flex-wrap:wrap; padding:2px 4px; border-left:1px solid #e5e7eb; margin-left:4px; }
+.section-panel .sec-range .range-label { font-size:10px; color:#475569; }
+.section-panel .sec-range .range-sep { font-size:10px; color:#94a3b8; }
+.section-panel .sec-range input { width:80px; padding:2px 4px; font-size:11px; border:1px solid #cbd5e1; border-radius:3px; text-align:right; background:#fff; }
+.section-panel .sec-range input:disabled { background:#f1f5f9; color:#9ca3af; }
 .section-panel .viewer-host { position:relative; flex:1 1 auto; min-height:320px; background:#000; }
 .section-panel .viewer-rot { position:absolute; inset:0; transform-origin:50% 50%; transform:rotate(-90deg); }
 .section-panel canvas.disp { position:absolute; }
@@ -112,20 +117,7 @@ body { font-family: 'Inter', sans-serif; background-color: #f4f4f5; }
     <!-- Three-column layout -->
     <div class="flex flex-1 overflow-hidden gap-1 p-1 min-h-0">
         <!-- Left sidebar -->
-        <aside class="flex flex-col gap-1 overflow-hidden" style="width:280px; min-width:280px;">
-            <!-- SPECIMEN -->
-            <div class="bg-white p-2 rounded shadow-sm shrink-0">
-                <h2 class="text-xs font-semibold mb-1 border-b pb-1 text-gray-500 uppercase tracking-wide">Specimen</h2>
-                <div id="specimen-form" class="space-y-1 text-xs">
-                    <div class="flex items-center gap-1"><span class="text-gray-500 w-16 shrink-0">ID</span><input data-spec-key="id" class="flex-1 border border-gray-200 rounded px-1 py-0.5 text-xs" /></div>
-                    <div class="flex items-center gap-1"><span class="text-gray-500 w-16 shrink-0">Organism</span><input data-spec-key="organism" class="flex-1 border border-gray-200 rounded px-1 py-0.5 text-xs" /></div>
-                    <div class="flex items-center gap-1"><span class="text-gray-500 w-16 shrink-0">Strain</span><input data-spec-key="strain" class="flex-1 border border-gray-200 rounded px-1 py-0.5 text-xs" /></div>
-                    <div class="flex items-center gap-1"><span class="text-gray-500 w-16 shrink-0">Age</span><input data-spec-key="age" class="flex-1 border border-gray-200 rounded px-1 py-0.5 text-xs" /></div>
-                    <div class="flex items-center gap-1"><span class="text-gray-500 w-16 shrink-0">Sex</span><input data-spec-key="sex" class="flex-1 border border-gray-200 rounded px-1 py-0.5 text-xs" /></div>
-                    <p class="text-[10px] text-gray-400" id="specimen-scope">Editing: (no section)</p>
-                </div>
-            </div>
-
+        <aside class="flex flex-col gap-1 overflow-hidden" style="width:300px; min-width:280px;">
             <!-- ROI LIST -->
             <div class="bg-white p-2 rounded shadow-sm flex-1 flex flex-col overflow-hidden min-h-0">
                 <div class="flex items-center justify-between mb-1 border-b pb-1 shrink-0 gap-1">
@@ -149,6 +141,29 @@ body { font-family: 'Inter', sans-serif; background-color: #f4f4f5; }
                     描画モード ON: アクティブな切片パネルを順にクリックして頂点を打ち、Enter またはダブルクリックで確定。Escape で中止。
                 </div>
             </div>
+
+            <!-- Method (MRM) - moved here from ANALYSIS panel -->
+            <details id="method-panel" class="bg-white rounded shadow-sm shrink-0 border border-gray-200" open>
+                <summary class="text-[11px] font-semibold text-gray-600 px-2 py-1 cursor-pointer select-none bg-gray-50 rounded-t">Method (MRM)</summary>
+                <div id="method-body" class="overflow-auto" style="max-height:38vh;">
+                    <table class="w-full text-[11px] border-collapse">
+                        <thead class="bg-gray-50" style="position:sticky;top:0;z-index:1;">
+                            <tr>
+                                <th class="text-left px-2 py-1 border-b border-gray-200 font-medium text-gray-500">Compound</th>
+                                <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">Precursor</th>
+                                <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">Fragment</th>
+                                <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">CE</th>
+                                <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">CV</th>
+                                <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">Mean</th>
+                                <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">Max</th>
+                            </tr>
+                        </thead>
+                        <tbody id="method-rows">
+                            <tr><td colspan="7" class="px-2 py-2 text-center text-gray-400">No compound</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </details>
         </aside>
 
         <!-- Center: sections grid -->
@@ -189,25 +204,15 @@ body { font-family: 'Inter', sans-serif; background-color: #f4f4f5; }
                 <div id="graph-container" class="flex-1 flex items-center justify-center border border-gray-200 rounded overflow-hidden min-h-0 bg-gray-50">
                     <p class="text-gray-400 text-xs">Select a ROI</p>
                 </div>
-                <details id="method-panel" class="mt-1 border border-gray-200 rounded shrink-0" open>
-                    <summary class="text-[11px] font-semibold text-gray-600 px-2 py-1 cursor-pointer select-none bg-gray-50 rounded-t">Method (MRM)</summary>
-                    <div id="method-body" class="overflow-auto" style="max-height:38vh;">
-                        <table class="w-full text-[11px] border-collapse">
-                            <thead class="bg-gray-50" style="position:sticky;top:0;z-index:1;">
-                                <tr>
-                                    <th class="text-left px-2 py-1 border-b border-gray-200 font-medium text-gray-500">Compound</th>
-                                    <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">Precursor</th>
-                                    <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">Fragment</th>
-                                    <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">CE</th>
-                                    <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">CV</th>
-                                    <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">Min</th>
-                                    <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500">Max</th>
-                                </tr>
-                            </thead>
-                            <tbody id="method-rows">
-                                <tr><td colspan="7" class="px-2 py-2 text-center text-gray-400">No compound</td></tr>
-                            </tbody>
-                        </table>
+                <details id="memo-panel" class="mt-1 border border-gray-200 rounded shrink-0" open>
+                    <summary class="text-[11px] font-semibold text-gray-600 px-2 py-1 cursor-pointer select-none bg-gray-50 rounded-t">Memo</summary>
+                    <div class="p-2 space-y-1.5 text-[11px]">
+                        <div class="flex items-center gap-2"><span class="w-24 shrink-0 text-gray-500">Sample</span><input id="memo-sample" type="text" class="flex-1 border border-gray-200 rounded px-1.5 py-0.5 text-[11px]"></div>
+                        <div class="flex items-center gap-2"><span class="w-24 shrink-0 text-gray-500">Machine</span><select id="memo-machine" class="flex-1 border border-gray-200 rounded px-1.5 py-0.5 text-[11px] bg-white"><option value="DESI">DESI</option><option value="TIMS">TIMS</option><option value="LTQ">LTQ</option></select></div>
+                        <div class="flex items-center gap-2"><span class="w-24 shrink-0 text-gray-500">Google Keep</span><input id="memo-google-keep" type="text" placeholder="https://keep.google.com/..." class="flex-1 border border-gray-200 rounded px-1.5 py-0.5 text-[11px]"></div>
+                        <div class="flex items-start gap-2"><span class="w-24 shrink-0 text-gray-500 mt-1">+α</span><textarea id="memo-free" rows="3" class="flex-1 border border-gray-200 rounded px-1.5 py-1 text-[11px] resize-y" placeholder="自由記述"></textarea></div>
+                        <div class="flex items-center gap-2"><span class="w-24 shrink-0 text-gray-500">Matrix</span><input id="memo-matrix" type="text" class="flex-1 border border-gray-200 rounded px-1.5 py-0.5 text-[11px]"></div>
+                        <div class="flex items-center gap-2"><span class="w-24 shrink-0 text-gray-500">Derivatization</span><input id="memo-derivatization" type="text" class="flex-1 border border-gray-200 rounded px-1.5 py-0.5 text-[11px]"></div>
                     </div>
                 </details>
             </div>
@@ -585,14 +590,18 @@ function rasterRowsToPngDataUrl(rows, range) {
         cnt[ri][ci] = (cnt[ri][ci] || 0) + 1;
     }
     let vmin = Infinity, vmax = -Infinity;
+    let sum = 0, n = 0;
     for (let i = 0; i < H; i++) for (let j = 0; j < W; j++) {
         if (cnt[i][j] > 0) {
             grid[i][j] /= cnt[i][j];
             const v = grid[i][j];
             if (v < vmin) vmin = v;
             if (v > vmax) vmax = v;
+            sum += v;
+            n++;
         }
     }
+    const rawMean = n > 0 ? (sum / n) : null;
     if (range && range.length === 2) { vmin = range[0]; vmax = range[1]; if (!(vmax > vmin)) vmax = vmin + 1e-9; }
     else if (!(vmax > vmin)) { vmin = 0; vmax = 1; }
     const canvas = document.createElement('canvas');
@@ -610,7 +619,7 @@ function rasterRowsToPngDataUrl(rows, range) {
         }
     }
     ctx.putImageData(imgData, 0, 0);
-    return { dataUrl: canvas.toDataURL('image/png'), rawRange: [vmin, vmax] };
+    return { dataUrl: canvas.toDataURL('image/png'), rawRange: [vmin, vmax], rawMean };
 }
 
 async function buildPngFromXlsxArrayBuffer(buf, def) {
@@ -816,6 +825,9 @@ class SectionPanel {
         this.visibleLayers = new Set();
         this.msiThumbRefs = new Map();
         this.layerPopover = null;
+        // Tracks the MSI layer most recently activated in this section. The
+        // header Range editor and Method table highlight target this key.
+        this.activeMsiKey = null;
         this.root = this.buildDom();
         this.attachDrawingHandlers();
     }
@@ -854,7 +866,45 @@ class SectionPanel {
             App.deleteSection(this.section.id);
         }));
         header.appendChild(acts);
+
+        // Range editor (raw scale) for the currently active MSI layer.
+        const rangeBox = document.createElement('div');
+        rangeBox.className = 'sec-range';
+        rangeBox.innerHTML =
+            '<span class="range-label">Range:</span>' +
+            '<input type="number" class="range-min" step="any" placeholder="min" disabled>' +
+            '<span class="range-sep">—</span>' +
+            '<input type="number" class="range-max" step="any" placeholder="max" disabled>';
+        rangeBox.addEventListener('click', (e) => e.stopPropagation());
+        header.appendChild(rangeBox);
         root.appendChild(header);
+        const rangeMinInp = rangeBox.querySelector('.range-min');
+        const rangeMaxInp = rangeBox.querySelector('.range-max');
+        const onRangeChange = (edge) => {
+            const key = this.activeMsiKey;
+            if (!key) return;
+            const settings = this.imageSettings[key];
+            if (!settings) return;
+            const ent = (this.section.msiSeries || {})[key] || {};
+            const rawRange = ent.rawRange || null;
+            const inp = edge === 'min' ? rangeMinInp : rangeMaxInp;
+            let lum = rawToLum(parseFloat(inp.value), rawRange);
+            if (!Number.isFinite(lum)) return;
+            lum = Math.max(0, Math.min(255, Math.round(lum)));
+            if (edge === 'min') {
+                if (lum >= settings.vmax) lum = settings.vmax - 1;
+                settings.vmin = lum;
+            } else {
+                if (lum <= settings.vmin) lum = settings.vmin + 1;
+                settings.vmax = lum;
+            }
+            this.renderComposite();
+            if (this.msiThumbRefs.has(key)) this.renderMsiThumbnail(key);
+            this.refreshRangeEditor();
+            if (App.activeSectionId === this.section.id) renderMethodTable();
+        };
+        rangeMinInp.addEventListener('change', () => onRangeChange('min'));
+        rangeMaxInp.addEventListener('change', () => onRangeChange('max'));
 
         const host = document.createElement('div');
         host.className = 'viewer-host';
@@ -865,7 +915,7 @@ class SectionPanel {
         rot.appendChild(cdisp); rot.appendChild(croi);
         host.appendChild(rot);
         root.appendChild(host);
-        this.dom = { root, header, host, rot, cdisp, croi, acts };
+        this.dom = { root, header, host, rot, cdisp, croi, acts, rangeBox };
         this.displayCtx = cdisp.getContext('2d', { willReadFrequently: true });
         this.roiCtx = croi.getContext('2d');
 
@@ -928,6 +978,12 @@ class SectionPanel {
             this.renderComposite();
             this.drawAllRois();
         }
+        // Pick a default active MSI layer for the Range editor.
+        if (!this.activeMsiKey) {
+            const msiKeys = Object.keys(this.section.msiSeries || {});
+            this.activeMsiKey = this.fallbackActiveMsiKey() || msiKeys[0] || null;
+        }
+        this.refreshRangeEditor();
     }
 
     firstLayerKey() {
@@ -956,11 +1012,13 @@ class SectionPanel {
         else result = await buildPngFromXlsxArrayBuffer(buf, ent);
         const dataUrl = (result && typeof result === 'object') ? result.dataUrl : result;
         const rawRange = (result && typeof result === 'object' && Array.isArray(result.rawRange)) ? result.rawRange : null;
+        const rawMean = (result && typeof result === 'object' && Number.isFinite(result.rawMean)) ? result.rawMean : null;
         this.imageDataUrls[key] = dataUrl;
         // Persist the raw MSI value range so the Method (MRM) table can show
-        // intensity Min/Max in the original scale rather than 0-255 luminance.
-        if (rawRange && this.section.msiSeries && this.section.msiSeries[key]) {
-            this.section.msiSeries[key].rawRange = rawRange;
+        // intensity Mean/Max in the original scale rather than 0-255 luminance.
+        if (this.section.msiSeries && this.section.msiSeries[key]) {
+            if (rawRange) this.section.msiSeries[key].rawRange = rawRange;
+            if (rawMean != null) this.section.msiSeries[key].rawMean = rawMean;
         }
         await this.attachImage(key, dataUrl);
     }
@@ -1383,10 +1441,15 @@ class SectionPanel {
     toggleLayer(key, force) {
         const want = (force === undefined) ? !this.visibleLayers.has(key) : !!force;
         if (want) this.visibleLayers.add(key); else this.visibleLayers.delete(key);
+        if (/^MSI_/i.test(key)) {
+            if (want) this.activeMsiKey = key;
+            else if (this.activeMsiKey === key) this.activeMsiKey = this.fallbackActiveMsiKey();
+        }
         this.rebuildLayerBar();
         this.renderComposite();
         this.drawAllRois();
         this.refreshThumbHighlights();
+        this.refreshRangeEditor();
         if (App.activeSectionId === this.section.id) renderMethodTable();
     }
 
@@ -1399,11 +1462,44 @@ class SectionPanel {
         }
         this.visibleLayers.clear();
         this.visibleLayers.add(key);
+        if (/^MSI_/i.test(key)) this.activeMsiKey = key;
         this.rebuildLayerBar();
         this.renderComposite();
         this.drawAllRois();
         this.refreshThumbHighlights();
+        this.refreshRangeEditor();
         if (App.activeSectionId === this.section.id) renderMethodTable();
+    }
+
+    fallbackActiveMsiKey() {
+        for (const k of this.visibleLayers) if (/^MSI_/i.test(k)) return k;
+        return null;
+    }
+
+    refreshRangeEditor() {
+        const box = this.dom && this.dom.rangeBox;
+        if (!box) return;
+        const minInp = box.querySelector('.range-min');
+        const maxInp = box.querySelector('.range-max');
+        const key = this.activeMsiKey;
+        const settings = key ? this.imageSettings[key] : null;
+        if (!key || !settings) {
+            minInp.value = '';
+            maxInp.value = '';
+            minInp.disabled = true;
+            maxInp.disabled = true;
+            box.title = 'Select an MSI layer to edit its display range';
+            return;
+        }
+        const ent = (this.section.msiSeries || {})[key] || {};
+        const rawRange = ent.rawRange || null;
+        const meta = ent.compoundMeta;
+        const baseLabel = (meta && meta.base) || formatDisplayName(key);
+        minInp.disabled = false;
+        maxInp.disabled = false;
+        minInp.value = formatRawValue(lumToRaw(settings.vmin, rawRange));
+        maxInp.value = formatRawValue(lumToRaw(settings.vmax, rawRange));
+        box.title = 'Display range for: ' + baseLabel;
     }
 
     removeLayer(key, skipConfirm) {
@@ -1424,10 +1520,14 @@ class SectionPanel {
         delete this.imageDataUrls[key];
         this.visibleLayers.delete(key);
         this.msiThumbRefs.delete(key);
+        if (this.activeMsiKey === key) {
+            this.activeMsiKey = this.fallbackActiveMsiKey() || Object.keys(this.section.msiSeries || {})[0] || null;
+        }
         this.rebuildLayerBar();
         this.populateThumbnails();
         this.renderEmptyOverlay();
         this.setupCanvasSize();
+        this.refreshRangeEditor();
         if (App.activeSectionId === this.section.id) renderMethodTable();
         App.queueSave();
     }
@@ -1922,6 +2022,38 @@ function renderAnalysisChart() {
     renderMethodTable();
 }
 
+// Memo (project-wide) helpers.
+function ensureMemoShape(memo) {
+    const m = memo && typeof memo === 'object' ? memo : {};
+    return {
+        sample: m.sample || '',
+        machine: m.machine || 'DESI',
+        googleKeep: m.googleKeep || '',
+        freeNote: m.freeNote || '',
+        matrix: m.matrix || '',
+        derivatization: m.derivatization || '',
+    };
+}
+
+function renderMemoForm() {
+    const project = App.project;
+    const memo = project ? (project.memo = ensureMemoShape(project.memo)) : ensureMemoShape();
+    const ids = [
+        ['memo-sample', 'sample'],
+        ['memo-machine', 'machine'],
+        ['memo-google-keep', 'googleKeep'],
+        ['memo-free', 'freeNote'],
+        ['memo-matrix', 'matrix'],
+        ['memo-derivatization', 'derivatization'],
+    ];
+    for (const [domId, key] of ids) {
+        const el = document.getElementById(domId);
+        if (!el) continue;
+        el.value = memo[key] || '';
+        el.disabled = !project;
+    }
+}
+
 // Look up the first compoundMeta across all sections that matches a given layer key.
 function findCompoundMeta(project, layerKey) {
     for (const sec of (project.sections || [])) {
@@ -1966,11 +2098,10 @@ function renderMethodTable() {
         const pro = (meta.product   != null) ? Number(meta.product).toFixed(2)   : '—';
         const ce  = (meta.ce  != null) ? String(meta.ce) : '—';
         const cv  = (meta.cv  != null) ? String(meta.cv) : '—';
-        const settings = panel.imageSettings[layerKey] || { vmin: 0, vmax: 255 };
+        const rawMean = (ent.rawMean != null) ? formatRawValue(ent.rawMean) : '—';
         const rawRange = ent.rawRange || null;
-        const rawMin = lumToRaw(settings.vmin, rawRange);
-        const rawMax = lumToRaw(settings.vmax, rawRange);
-        const isActive = panel.visibleLayers.has(layerKey);
+        const rawMax = (rawRange && Number.isFinite(rawRange[1])) ? formatRawValue(rawRange[1]) : '—';
+        const isActive = (panel.activeMsiKey === layerKey) || panel.visibleLayers.has(layerKey);
 
         const tr = document.createElement('tr');
         tr.className = 'method-row' + (isActive ? ' active' : '');
@@ -1982,45 +2113,13 @@ function renderMethodTable() {
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(pro) + '</td>' +
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(ce) + '</td>' +
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(cv) + '</td>' +
-            '<td class="px-2 py-1 border-b border-gray-100 text-right">' +
-                '<input type="number" class="range-input" data-edge="min" step="any" value="' + formatRawValue(rawMin) + '">' +
-            '</td>' +
-            '<td class="px-2 py-1 border-b border-gray-100 text-right">' +
-                '<input type="number" class="range-input" data-edge="max" step="any" value="' + formatRawValue(rawMax) + '">' +
-            '</td>';
+            '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(rawMean) + '</td>' +
+            '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(rawMax) + '</td>';
         tr.innerHTML = cellHtml;
 
-        // Click anywhere except in the input fields => solo / additive layer activation.
         tr.addEventListener('click', (ev) => {
-            if (ev.target && ev.target.tagName === 'INPUT') return;
             const p = App.activeSectionId ? App.panels.get(App.activeSectionId) : null;
             if (p) p.handleLayerClick(layerKey, ev);
-        });
-
-        // Min / Max range editing.
-        tr.querySelectorAll('input.range-input').forEach((inp) => {
-            inp.addEventListener('change', () => {
-                const p = App.activeSectionId ? App.panels.get(App.activeSectionId) : null;
-                if (!p) return;
-                const settings2 = p.imageSettings[layerKey];
-                if (!settings2) return;
-                const ent2 = p.section.msiSeries[layerKey] || {};
-                const rawRange2 = ent2.rawRange || null;
-                let lum = rawToLum(parseFloat(inp.value), rawRange2);
-                if (!Number.isFinite(lum)) return;
-                lum = Math.max(0, Math.min(255, Math.round(lum)));
-                if (inp.dataset.edge === 'min') {
-                    if (lum >= settings2.vmax) lum = settings2.vmax - 1;
-                    settings2.vmin = lum;
-                } else {
-                    if (lum <= settings2.vmin) lum = settings2.vmin + 1;
-                    settings2.vmax = lum;
-                }
-                p.renderComposite();
-                if (p.msiThumbRefs.has(layerKey)) p.renderMsiThumbnail(layerKey);
-                renderMethodTable();
-            });
-            inp.addEventListener('click', (ev) => ev.stopPropagation());
         });
 
         tbody.appendChild(tr);
@@ -2574,6 +2673,7 @@ async function exportProjectAsZip() {
             id: r.id, colorKey: r.colorKey, name: r.name, rgba: r.rgba, polysBySection: r.polysBySection,
         })),
         roiHidden: project.roiHidden || {},
+        memo: ensureMemoShape(project.memo),
     };
     zip.file('project.json', JSON.stringify(projDoc, null, 2));
 
@@ -2683,6 +2783,7 @@ async function importZipFile(file) {
         sections: [],
         rois: [],
         roiHidden: projDoc.roiHidden || {},
+        memo: ensureMemoShape(projDoc.memo),
         createdAt: nowIso(),
     };
 
@@ -2790,6 +2891,9 @@ const App = {
         document.getElementById('roi-list').innerHTML = '<p class="text-gray-500">No project loaded.</p>';
         document.getElementById('graph-container').innerHTML = '<p class="text-gray-400 text-xs">No project</p>';
         ['graph-select-1', 'graph-select-2', 'graph-select-3'].forEach(id => document.getElementById(id).innerHTML = '');
+        const tbody = document.getElementById('method-rows');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="px-2 py-2 text-center text-gray-400">No project</td></tr>';
+        renderMemoForm();
         this.refreshAnalysisScope();
     },
 
@@ -2808,6 +2912,7 @@ const App = {
         this.project.sections = this.project.sections || [];
         this.project.rois = this.project.rois || [];
         this.project.roiHidden = this.project.roiHidden || {};
+        this.project.memo = ensureMemoShape(this.project.memo);
         backfillLegacyCompoundMeta(this.project);
         localStorage.setItem('desi:lastProjectId', id);
         document.getElementById('project-name-input').value = project.displayName || '';
@@ -2816,6 +2921,7 @@ const App = {
         populateRoiList();
         setupGraphSelector();
         this.refreshAnalysisScope();
+        renderMemoForm();
         await this.refreshProjectPicker();
         this.renderAnalysis();
     },
@@ -2828,6 +2934,7 @@ const App = {
             sections: [],
             rois: [],
             roiHidden: {},
+            memo: ensureMemoShape(),
             createdAt: nowIso(),
         };
         await ProjectStorage.putProject(project);
@@ -2885,7 +2992,6 @@ const App = {
         document.getElementById('section-count').textContent = this.project.sections.length + ' sections';
         document.getElementById('sections-empty').classList.toggle('hidden', this.project.sections.length > 0);
         populateRoiList();
-        this.refreshSpecimenForm();
         this.renderAnalysis();
         await this.queueSave(0);
     },
@@ -2909,21 +3015,7 @@ const App = {
     setActiveSection(id) {
         this.activeSectionId = id;
         this.panels.forEach(p => p.setActive(p.section.id === id));
-        this.refreshSpecimenForm();
         renderMethodTable();
-    },
-
-    refreshSpecimenForm() {
-        const form = document.getElementById('specimen-form');
-        const scope = document.getElementById('specimen-scope');
-        const sec = (this.project && this.project.sections || []).find(s => s.id === this.activeSectionId);
-        const specimen = (sec && sec.meta && sec.meta.specimen) || {};
-        form.querySelectorAll('input[data-spec-key]').forEach(inp => {
-            const k = inp.dataset.specKey;
-            inp.value = specimen[k] || '';
-            inp.disabled = !sec;
-        });
-        scope.textContent = sec ? ('Editing: ' + (sec.displayName || sec.id)) : 'Editing: (no section)';
     },
 
     refreshAnalysisScope() {
@@ -3062,17 +3154,26 @@ const App = {
         ['graph-select-1', 'graph-select-2', 'graph-select-3'].forEach(id => {
             document.getElementById(id).addEventListener('change', () => this.renderAnalysis());
         });
-        // specimen form bindings
-        document.querySelectorAll('#specimen-form input[data-spec-key]').forEach(inp => {
-            inp.addEventListener('change', () => {
-                const sec = (this.project && this.project.sections || []).find(s => s.id === this.activeSectionId);
-                if (!sec) return;
-                sec.meta = sec.meta || {};
-                sec.meta.specimen = sec.meta.specimen || {};
-                sec.meta.specimen[inp.dataset.specKey] = inp.value;
+        // Memo form bindings (project-wide)
+        const memoMap = {
+            'memo-sample': 'sample',
+            'memo-machine': 'machine',
+            'memo-google-keep': 'googleKeep',
+            'memo-free': 'freeNote',
+            'memo-matrix': 'matrix',
+            'memo-derivatization': 'derivatization',
+        };
+        for (const [domId, key] of Object.entries(memoMap)) {
+            const el = document.getElementById(domId);
+            if (!el) continue;
+            const evtName = (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') ? 'input' : 'change';
+            el.addEventListener(evtName, () => {
+                if (!this.project) return;
+                this.project.memo = this.project.memo || {};
+                this.project.memo[key] = el.value;
                 this.queueSave();
             });
-        });
+        }
         window.addEventListener('beforeunload', () => {
             if (this.saveTimer) {
                 clearTimeout(this.saveTimer);
