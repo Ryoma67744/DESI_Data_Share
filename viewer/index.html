@@ -320,13 +320,13 @@ body.splitting-v { cursor:row-resize !important; }
                     <button type="button" class="sync-toggle" data-sync="vmax" title="Sync Max across sections">🔗</button>
                 </span>
                 <span class="tb-group">
-                    <span class="tb-label">Op:</span>
+                    <span class="tb-label">Opacity:</span>
                     <input type="number" id="tb-opacity" step="1" min="0" max="100" disabled>
                     <span class="tb-pct">%</span>
                     <button type="button" class="sync-toggle" data-sync="opacity" title="Sync Opacity across sections">🔗</button>
                 </span>
                 <span class="tb-group">
-                    <span class="tb-label">Rot:</span>
+                    <span class="tb-label">Rotation:</span>
                     <input type="number" id="tb-rotation" step="1" min="-180" max="180" value="0" disabled>
                     <span class="tb-deg">°</span>
                     <button type="button" id="tb-rot-reset" class="tb-icon" title="Reset translate/rotate/zoom">↻</button>
@@ -3787,6 +3787,21 @@ async function openHelpModal(lang) {
         console.error('Markdown render failed', e);
         bodyHtml = '<pre>' + String(md).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>';
     }
+    // marked@12 no longer auto-generates heading ids, so the TOC anchors
+    // (#1-…) wouldn't match anything. Add ids ourselves using the same
+    // slug rule the markdown source uses (lowercase, drop common
+    // punctuation, spaces → '-'). Keeps Japanese characters as-is.
+    const slugifyHelp = (s) => String(s).trim().toLowerCase()
+        .replace(/[\.\(\)（）「」、，,]/g, '')
+        .replace(/\s+/g, '-');
+    try {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = bodyHtml;
+        tmp.querySelectorAll('h1, h2, h3').forEach(h => {
+            if (!h.id) h.id = slugifyHelp(h.textContent || '');
+        });
+        bodyHtml = tmp.innerHTML;
+    } catch (e) { console.warn('help: heading id injection failed', e); }
     const tabBtn = (key, active) =>
         `<button type="button" data-help-lang="${key}" style="padding:3px 10px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;cursor:pointer;background:${active ? '#2563eb' : '#fff'};color:${active ? '#fff' : '#1e293b'};">${_helpGuideSources[key].label}</button>`;
     const html = `
@@ -3810,6 +3825,31 @@ async function openHelpModal(lang) {
                 openHelpModal(next).catch(e => console.error(e));
             });
         });
+        // Intercept TOC clicks: native anchor navigation would scroll the
+        // window, but the modal has its own scroll container (.modal-card
+        // overflow-y:auto). Find the matching heading inside the modal and
+        // scroll the card to it instead.
+        const card = openModal._card;
+        const helpBody = card.querySelector('.help-body');
+        if (helpBody) {
+            helpBody.querySelectorAll('a[href^="#"]').forEach(a => {
+                a.addEventListener('click', (ev) => {
+                    const href = a.getAttribute('href') || '';
+                    if (href.length < 2) return;
+                    let target = null;
+                    try { target = helpBody.querySelector(href); } catch (e) {}
+                    if (!target) {
+                        // Fallback: match by id with slugified text on each heading.
+                        const want = href.slice(1);
+                        target = Array.from(helpBody.querySelectorAll('h1, h2, h3'))
+                            .find(h => slugifyHelp(h.textContent || '') === want) || null;
+                    }
+                    if (!target) return;
+                    ev.preventDefault();
+                    target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                });
+            });
+        }
     }
     return p;
 }

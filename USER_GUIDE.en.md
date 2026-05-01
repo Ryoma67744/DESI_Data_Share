@@ -1,60 +1,64 @@
-# DESI Data Share — User Guide
+# DESI Data Share — Viewer's Guide
 
-This guide explains how to use **DESI Data Share** straight from a browser.
-No installation is required: just open `viewer/index.html`.
+This guide is written for **users opening DESI Data Share via a share URL**.
+Master-side operations (creating projects, registering layers, publishing, etc.) are out of scope here.
 
-> The Supabase share mode of the legacy `Marmoset Brain Atlas Viewer` has been re-implemented in this version. The Master edits everything locally (browser IndexedDB) and can publish a share URL via `Publish to share`. Recipients open that URL in a read-centric viewer mode.
-> The bundled `USER_GUIDE.pdf` is from the previous version and is out of date — treat this Markdown file as the source of truth.
+> The person who issued the URL should also have given you a **viewer password** separately. If you don't have it, contact them.
 
 ---
 
 ## Table of Contents
 
-1. [What this app can do](#1-what-this-app-can-do)
-2. [Launch & layout](#2-launch--layout)
-3. [Projects and sections](#3-projects-and-sections)
-4. [Drawing and showing ROIs](#4-drawing-and-showing-rois)
-5. [ANALYSIS (parallel bar chart)](#5-analysis-parallel-bar-chart)
-6. [ZIP import / export](#6-zip-import--export)
-7. [What gets saved vs discarded](#7-what-gets-saved-vs-discarded)
-8. [Keyboard shortcuts](#8-keyboard-shortcuts)
+1. [What you can do as a viewer](#1-what-you-can-do-as-a-viewer)
+2. [Open the URL & enter the password](#2-open-the-url--enter-the-password)
+3. [Screen layout](#3-screen-layout)
+4. [Showing and adding ROIs](#4-showing-and-adding-rois)
+5. [Method (MRM) and switching compounds](#5-method-mrm-and-switching-compounds)
+6. [Range / Opacity / Rotation tweaks](#6-range--opacity--rotation-tweaks)
+7. [Editing the Memo](#7-editing-the-memo)
+8. [Export ZIP for local download](#8-export-zip-for-local-download)
+9. [What gets saved vs discarded](#9-what-gets-saved-vs-discarded)
+10. [Keyboard shortcuts](#10-keyboard-shortcuts)
 
 ---
 
-## 1. What this app can do
+## 1. What you can do as a viewer
 
-- Render any number of **section panels** side by side, each with its own HE/IF/MSI layer stack
-- Register HE / IF TIFFs (PNG/JPEG also accepted) together with an **affine transform JSON (`T_he_to_msi`)** so they line up with MSI coordinates
-- Import existing MSI **`.xlsx`** files (`MSI_Data` sheet, Image_X / Image_Y / intensity columns) and split them per compound
-- Import MSI **`.txt`** files (Analyte format or generic TSV/CSV) the same way
-- Hand-draw ROIs on each section, sharing the same ROI across multiple sections
-- Compare the **mean intensity** of a selected ROI across compounds × sections in a parallel bar chart
-- Distribute the entire project as a single **ZIP file** or as a **share URL**
+- Browse section images (HE / IF / MSI) layered per compound
+- Switch and compare compounds (Free / Compound mode)
+- Toggle existing ROIs on/off
+- Add new ROIs and delete existing ones — **only while holding the write lock** (one editor at a time)
+- Compare mean intensity across sections × compounds in the ANALYSIS bar chart
+- Make **temporary** display adjustments (Range / Opacity / Rotation / Pan / Zoom)
+- **Temporarily** edit the Memo
+- Download the entire project as a ZIP
 
 ---
 
-## 2. Launch & layout
+## 2. Open the URL & enter the password
 
-### 2-1. Recommended browsers
+1. Open the URL you received in your browser (e.g. `https://.../viewer/index.html#share=<slug>`)
+2. The "共有プロジェクト" (Shared project) dialog appears — enter the **viewer password** that was shared with you
+3. Click **Unlock** to load the project
+4. A 🔒 **Share view** badge appears in the header and the editing-related buttons are hidden automatically
 
-Latest Chrome / Edge / Firefox / Safari. Window width ≥ 1280 px is recommended.
+The session expires after **12 hours**. Closing the tab is fine — re-opening the URL with the same password logs you back in.
 
-### 2-2. Launching
+---
 
-Open `viewer/index.html` directly, or visit your published GitHub Pages URL. Opening a share URL (`#share=<slug>`) automatically enters viewer mode.
-
-### 2-3. Screen layout
+## 3. Screen layout
 
 <div style="border:1px solid #475569;border-radius:6px;overflow:hidden;font-size:11px;margin:10px 0;background:#fff;">
   <div style="background:#1e293b;color:#fff;padding:6px 10px;font-weight:600;letter-spacing:0.02em;">
-    Top Bar &nbsp;—&nbsp; Project picker / New / Import ZIP / Export ZIP / Publish to share / Share info / + Section / Delete / Help
+    Top Bar &nbsp;—&nbsp; 🔒 Share view / Free / Compound / Export ZIP / Help
   </div>
   <div style="display:grid;grid-template-columns:170px 1fr 220px;">
     <div style="background:#f8fafc;padding:8px;border-right:1px solid #cbd5e1;">
       <div style="font-weight:600;color:#0f172a;">ROI LIST</div>
       <ul style="margin:6px 0 0 1em;padding:0;color:#475569;font-size:11px;line-height:1.5;">
-        <li>+ New / Show toggle</li>
-        <li>Per-ROI checkbox &amp; delete</li>
+        <li>+ New (requires lock)</li>
+        <li>Show toggle</li>
+        <li>Per-row checkbox &amp; delete</li>
       </ul>
     </div>
     <div style="padding:8px;background:#fff;">
@@ -62,20 +66,17 @@ Open `viewer/index.html` directly, or visit your published GitHub Pages URL. Ope
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
         <div style="border:1px solid #cbd5e1;padding:6px;border-radius:4px;background:#f8fafc;">
           <div style="font-weight:600;font-size:11px;">Section 1</div>
-          <div style="color:#64748b;font-size:11px;">canvas</div>
-          <div style="color:#64748b;font-size:11px;">+ HE/IF / + MSI</div>
-          <div style="color:#64748b;font-size:11px;">thumbs</div>
+          <div style="color:#64748b;font-size:11px;">canvas (pan/zoom)</div>
+          <div style="color:#64748b;font-size:11px;">thumbs (on/off)</div>
         </div>
         <div style="border:1px solid #cbd5e1;padding:6px;border-radius:4px;background:#f8fafc;">
           <div style="font-weight:600;font-size:11px;">Section 2</div>
           <div style="color:#64748b;font-size:11px;">canvas</div>
-          <div style="color:#64748b;font-size:11px;">+ HE/IF / + MSI</div>
           <div style="color:#64748b;font-size:11px;">thumbs</div>
         </div>
         <div style="border:1px solid #cbd5e1;padding:6px;border-radius:4px;background:#f8fafc;">
           <div style="font-weight:600;font-size:11px;">Section 3</div>
           <div style="color:#64748b;font-size:11px;">canvas</div>
-          <div style="color:#64748b;font-size:11px;">+ HE/IF / + MSI</div>
           <div style="color:#64748b;font-size:11px;">thumbs</div>
         </div>
       </div>
@@ -88,7 +89,7 @@ Open `viewer/index.html` directly, or visit your published GitHub Pages URL. Ope
       <div style="font-weight:600;color:#0f172a;">ANALYSIS</div>
       <ul style="margin:6px 0 8px 1em;padding:0;color:#475569;font-size:11px;line-height:1.5;">
         <li>Section-parallel bar chart</li>
-        <li>Up to 3 compound series</li>
+        <li>Up to 3 compound dropdowns</li>
       </ul>
       <div style="font-weight:600;color:#0f172a;">Memo</div>
       <ul style="margin:6px 0 0 1em;padding:0;color:#475569;font-size:11px;line-height:1.5;">
@@ -100,92 +101,105 @@ Open `viewer/index.html` directly, or visit your published GitHub Pages URL. Ope
 
 | Region | Role |
 | --- | --- |
-| Top Bar | Project picker, ZIP I/O, Publish to share, add section, Help |
+| Top Bar | View mode toggle (Free / Compound), Export ZIP, Help |
 | ROI LIST | Project-wide ROI list. Show toggle, draw new, draw on extra section |
-| Sections Grid | Section panels in an `auto-fit` grid (1 – 10 sections expected) |
+| Sections Grid | Section panels. Click to activate (blue outline); drag to pan; wheel to zoom |
 | Method (MRM) | MSI layer table for the active section. Click to switch display |
 | ANALYSIS | Bar chart of the selected ROI across sections × compounds |
-| Memo | Specimen metadata (Sample / Machine / Matrix / Google Keep / +α …) |
-
-Click a section panel to make it **active** (blue outline). The active panel is the target for ROI drawing and Method operations.
-
-> When opened via a share URL (`#share=<slug>`), all editing buttons (`+ Section`, `Delete`, registration buttons) are hidden and a `Share view` badge appears in the header.
+| Memo | Sample / Machine / Matrix / Google Keep / +α … (temporary edits) |
 
 ---
 
-## 3. Projects and sections
+## 4. Showing and adding ROIs
 
-### 3-1. New project
-
-1. Click **`New`** in the Top Bar
-2. Enter a project name and click `Create`
-3. The project starts empty — click `+ Section` to add slices
-
-### 3-2. Switching projects
-
-- Pick a saved project from the Top Bar dropdown
-- It is reloaded from IndexedDB automatically
-
-### 3-3. Deleting a project
-
-The `Delete` button removes the active project together with **all of its blobs** (TIFF / xlsx / txt) from IndexedDB.
-
-### 3-4. Adding / removing sections
-
-- `+ Section` adds an empty section panel
-- `×` on a panel header deletes only that section
-- `poly_msi` entries for that section inside any ROI are also removed
-
-> **Share mode** does not allow adding or removing sections (the buttons are hidden).
-
----
-
-## 4. Drawing and showing ROIs
-
-### 4-1. New ROI
-
-1. Click the section panel you want to make active
-2. Click **`+ New`** in ROI LIST (drawing mode ON)
-3. Click on the canvas to drop ≥ 3 vertices in order
-4. To finish:
-   - Click the first vertex again, or
-   - Double-click, or
-   - Press **Enter**
-5. Type an ROI name (defaults to a key from the anatomy palette)
-6. The ROI is added to ROI LIST (colour assigned automatically)
-
-### 4-2. Drawing the same ROI on another section
-
-- Click **`+ draw`** next to the ROI in the list → drawing mode ON for the active section
-- The same ROI `id` accumulates polygons in `polysBySection`
-- The right-side `2/3` badge means "drawn on / total sections"
-
-### 4-3. Visibility control
+### 4-1. Showing or hiding existing ROIs
 
 - Per-row **checkbox** toggles a single ROI on/off
-- The **`Show`** switch in the ROI LIST header toggles all ROIs
-- The **`×`** button removes the ROI entirely (across every section)
+- The **Show** toggle in the ROI LIST header toggles all ROIs
 
-> While drawing you cannot switch sections. Press Escape to cancel.
+These toggles affect only your local view — they are not sent to the server.
 
-> In **share mode**, ROI editing is permitted **only after acquiring an exclusive lock** (one writer at a time). Other viewers must wait until the lock is released.
+### 4-2. Drawing a new ROI (write lock required)
+
+In share mode, **acquiring the write lock is required** to add or modify ROIs (one writer at a time).
+
+1. Click the section panel you want to draw on (it gets a blue outline)
+2. Click **`+ 新規`** (New) on ROI LIST → the lock is requested automatically
+3. Once you hold the lock, drop ≥ 3 vertices on the canvas
+4. Finish by either:
+   - Clicking the first vertex again
+   - Double-clicking
+   - Pressing **Enter**
+5. Type an ROI name → **saved to the server immediately**, visible to other viewers after they reload
+
+> If the lock is held by someone else, you'll see "ロック中: \<name\>" (Locked by …). After 30 s without a heartbeat from the holder, anyone can take it over.
+> The lock is released automatically once you finish the drawing.
+
+### 4-3. Drawing the same ROI on another section
+
+- Click **`+ draw`** next to the ROI in the list → drawing mode for the active section
+- The same ROI now spans multiple sections
+- The right-side `2/3` badge means "drawn on / total sections"
+
+### 4-4. Deleting an ROI
+
+- The **`×`** on each row removes the ROI everywhere — propagated to the server immediately
+- Deletion also requires the write lock
+
+> While drawing you cannot switch sections. Press **Escape** to cancel (in-flight vertices are dropped).
 
 ---
 
-## 5. ANALYSIS (parallel bar chart)
+## 5. Method (MRM) and switching compounds
 
-- Select an ROI from ROI LIST to render a bar chart whose x-axis is **every section that ROI is drawn on**
-- Up to 3 compound dropdowns let you compare grouped series
-- The **fill colour** is the compound colour; the **outline colour** is the ROI palette colour
-- If an ROI is drawn on a single section, only that section appears
+The **Method (MRM)** table at the bottom-left lists every MSI layer in the active section.
+
+| Column | Meaning |
+| --- | --- |
+| Compound | Compound name |
+| Precursor | Precursor m/z |
+| Product | Product m/z |
+| CE | Collision Energy |
+| CV | Collision Voltage / Compensation Voltage |
+| Range | Current min / max of this layer's intensity range |
+
+Clicking a row:
+- **Compound mode** focuses that compound across every section (handy for cross-section comparison)
+- **Free mode** simply toggles that single layer on/off
+
+The **Free / Compound** switch lives in the top-right of the header.
 
 ---
 
-## 6. ZIP import / export
+## 6. Range / Opacity / Rotation tweaks
 
-### 6-1. Export ZIP
+Three groups in each section's toolbar:
 
-`Export ZIP` in the Top Bar bundles the entire active project into one zip:
+| Field | Input | Meaning |
+| --- | --- | --- |
+| **Range** | min — max | Intensity window of the active MSI layer (display floor / ceiling) |
+| **Opacity** | 0–100 % | Layer transparency |
+| **Rotation** | -180°–180° | Whole-canvas rotation (combines with pan and zoom) |
+
+The **🔗** icon on each field syncs that value across every section. The **`↻`** button resets translate / rotate / zoom for the panel.
+
+> These tweaks are **temporary** — they revert to the server state on reload, and other viewers don't see them.
+
+> Pan: drag without modifier. Zoom: mouse wheel. Rotation: the input field, optionally synced with 🔗.
+
+---
+
+## 7. Editing the Memo
+
+The **Memo** form on the bottom-right lets you edit Sample / Machine / Google Keep / +α / Matrix / Derivatization.
+
+> Memo edits are **temporary** — they're discarded on reload and never sent to the server.
+
+---
+
+## 8. Export ZIP for local download
+
+The header's **Export ZIP** packages the entire viewable project into a single zip on your machine:
 
 ```
 <project>_<timestamp>.zip
@@ -199,88 +213,51 @@ The `Delete` button removes the active project together with **all of its blobs*
          └─ msi_MSI_DA__<file>.xlsx  ← xlsx with appended User-ROI flag columns
 ```
 
-Each xlsx has **0/1 flag columns** appended for every ROI drawn on that section (the original file's last 2 columns are preserved).
+Each xlsx has a **0/1 flag column** appended for every ROI drawn on that section (the original file's last 2 columns are preserved).
 
-> The ZIP **does not contain the share URL or passwords**. To distribute via URL, use `Publish to share` instead.
-
-### 6-2. Import ZIP
-
-1. Click **`Import ZIP`** in the Top Bar
-2. Pick a previously exported zip
-3. It is imported as a brand-new project and opened automatically
-
-> Import always assigns fresh ids, so importing the same zip twice yields two separate projects rather than overwriting one.
+> ZIP is for local use only. **You cannot re-upload or publish** from the viewer side (the buttons aren't shown to viewers).
 
 ---
 
-## 7. What gets saved vs discarded
+## 9. What gets saved vs discarded
 
-DESI Data Share has **two storage targets**:
+| Action | Where it persists | Visible to others | Survives reload |
+| --- | --- | --- | --- |
+| Add / edit / delete ROI | **Server** | ✅ (after their reload) | ✅ |
+| Range / Opacity / Rotation tweaks | (local cache only) | ❌ | ❌ |
+| Pan position / zoom level | (same) | ❌ | ❌ |
+| Marker colour / layer on-off | (same) | ❌ | ❌ |
+| View mode (Free / Compound) | localStorage | ❌ | ✅ |
+| Memo edits | (local cache only) | ❌ | ❌ |
+| Vertices in flight (Escape / leave) | discarded | — | — |
 
-- **Local IndexedDB** — your browser, per profile (gone when an incognito window closes)
-- **Supabase server** — only for projects that were `Publish to share`-d. Shared by every viewer
+Bottom line:
 
-Behaviour differs by mode.
-
-### 7-1. Master mode (your editing screen)
-
-| Item | Storage | Notes |
-| --- | --- | --- |
-| Project name, section structure | IndexedDB | Auto-saved ~400 ms after each change |
-| HE / IF / MSI layer settings | IndexedDB | Range / Opacity / Rotation / marker colour persisted |
-| Registered files (TIFF / xlsx / txt) | IndexedDB | Stored as blobs |
-| ROIs (vertices / name / colour / per-section) | IndexedDB | Auto-saved |
-| Memo (Sample / Machine / Matrix …) | IndexedDB | Auto-saved |
-| Active section / view mode (Free / Compound) / focus compound | localStorage | Restored on next launch |
-| Share URL / passwords (after Publish) | IndexedDB | Re-displayed via `Share info`. Local only — the server never receives them in cleartext |
-
-→ Practically every action by the master is **auto-saved**. Nothing is silently dropped.
-
-### 7-2. Publish to share
-
-| Item | Storage | Notes |
-| --- | --- | --- |
-| Section structure / meta / transforms | Supabase tables | Re-publishing the same slug **overwrites the entire project** |
-| HE / IF / MSI binaries | Supabase Storage (`atlases` bucket) | Public-read; the security model assumes anyone with the URL may fetch the bytes |
-| All ROIs | Supabase tables | The previous server-side ROI set is replaced |
-| Viewer / Admin passwords | Supabase tables (bcrypt) | Cleartext is never sent to the server; the master keeps it locally only |
-| Memo / Range / marker colours | **Not** sent to the server | These remain master-local |
-
-> Re-publishing under the same slug overwrites the server-side project, including ROIs.
-
-### 7-3. Share mode (recipient, opened via `#share=<slug>`)
-
-| Item | What happens |
-| --- | --- |
-| Adding / editing / deleting ROIs | **Pushed to the server immediately**. Other viewers must wait while you hold the write lock |
-| Up-to-12-hour session | Stored in sessionStorage (lost when the tab closes) |
-| HE / IF / MSI files | Fetched from the server and cached in IndexedDB for that tab |
-| Layer on/off, Range, Opacity, marker colour, view mode | Editable for display purposes, but **reverted to the server state on the next reload** |
-| Memo edits | Same — discarded on reload |
-| Aborting drawing (Escape / leaving mid-draw) | Vertices in flight are dropped. Without finishing (Enter / first-vertex click) nothing is sent to the server |
-
-→ In share mode, only **ROIs are persisted**. Visual tweaks (range, colours, memo) are session-only and reset on reload.
-
-### 7-4. Caveats
-
-- A different browser profile is a different dataset. To hand a project to another master, **always use ZIP**. To let a collaborator browse, use **`Publish to share`** and share the URL
-- Incognito windows lose everything when closed
-- Large TIFFs × many compounds × 5 – 10 sections can take tens of seconds (or longer) to export or publish
-- IndexedDB capacity depends on the browser — Chrome / Edge usually allow several GB, but content can be evicted under storage pressure. **Back up important projects as a ZIP.**
+- **Only ROIs persist on the server** and are shared with other viewers.
+- Display tweaks (colour, zoom, memo, etc.) are **session-only** and reset on reload.
+- The session itself (12 h) lives in sessionStorage. Closing the tab clears it.
+- ROI edits require the **write lock** — others have to wait while you hold it.
 
 ---
 
-## 8. Keyboard shortcuts
+## 10. Keyboard shortcuts
 
 | Key | Action |
 | --- | --- |
 | `Enter` | Drawing mode: commit the ROI at the current vertex set |
-| `Escape` | Drawing mode: cancel |
+| `Escape` | Drawing mode: cancel (in-flight vertices are dropped) |
 | `Ctrl + F5` / `Cmd + Shift + R` | Browser hard reload |
 
 ---
 
-## License / feedback
+## Troubleshooting
 
-The implementation lives in a single `viewer/index.html` (Tailwind / SheetJS / UTIF / JSZip / supabase-js / marked / DOMPurify, all loaded via CDN).
-Bug reports and feature requests welcome at the GitHub Issues page.
+| Symptom | Check |
+| --- | --- |
+| "Wrong password" | Make sure the viewer password matches exactly (case-sensitive) |
+| `+ 新規` shows "Locked by …" | Someone else is editing. Wait ~30 s and try again |
+| My ROI changes don't appear for others | Other viewers must **reload** to see them |
+| Zoom / colour tweaks disappeared next time | By design — display tweaks are session-only |
+| Images don't show up | The publisher's Storage settings may have changed. Contact them |
+
+For bug reports or requests, contact the publisher or open a GitHub Issue.
