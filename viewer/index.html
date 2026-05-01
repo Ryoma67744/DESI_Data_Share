@@ -3665,29 +3665,43 @@ async function openPublishMetaModal(project) {
     return p;
 }
 
-// Fetch USER_GUIDE.md from the repository root, render it with marked,
-// sanitise with DOMPurify and show inside a wide modal. Cached after the
-// first successful fetch so the network round-trip happens only once.
-let _helpMarkdownCache = null;
-async function openHelpModal() {
-    let md = _helpMarkdownCache;
+// Fetch USER_GUIDE.md (or USER_GUIDE.en.md) from the repository root,
+// render it with marked, sanitise with DOMPurify and show inside a wide
+// modal. Cached per language after the first successful fetch so the
+// network round-trip happens only once per language.
+const _helpGuideSources = {
+    ja: { path: '../USER_GUIDE.md',    label: '日本語', title: 'DESI Data Share — User Guide', openLabel: '新しいタブで開く', closeLabel: 'Close', errTitle: 'Help を取得できませんでした', errBody: (e) => `USER_GUIDE.md の取得に失敗しました (${e}).` },
+    en: { path: '../USER_GUIDE.en.md', label: 'English', title: 'DESI Data Share — User Guide', openLabel: 'Open in new tab', closeLabel: 'Close', errTitle: 'Failed to load help', errBody: (e) => `Could not fetch USER_GUIDE.en.md (${e}).` },
+};
+const _helpMarkdownCache = { ja: null, en: null };
+
+function _readHelpLang() {
+    try {
+        const v = localStorage.getItem('desi:helpLang');
+        if (v === 'ja' || v === 'en') return v;
+    } catch (e) {}
+    return (typeof navigator !== 'undefined' && /^en/i.test(navigator.language || '')) ? 'en' : 'ja';
+}
+
+async function openHelpModal(lang) {
+    lang = (lang === 'en' || lang === 'ja') ? lang : _readHelpLang();
+    try { localStorage.setItem('desi:helpLang', lang); } catch (e) {}
+    const cfg = _helpGuideSources[lang];
+    let md = _helpMarkdownCache[lang];
     if (md == null) {
-        // The viewer is served from /<repo>/viewer/, the guide from /<repo>/.
-        // The relative path below works on both GitHub Pages and the local
-        // file:// case.
         try {
-            const resp = await fetch('../USER_GUIDE.md', { cache: 'no-cache' });
+            const resp = await fetch(cfg.path, { cache: 'no-cache' });
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             md = await resp.text();
-            _helpMarkdownCache = md;
+            _helpMarkdownCache[lang] = md;
         } catch (e) {
             console.error('Help fetch failed', e);
-            const html = `
-                <h2>Help を取得できませんでした</h2>
-                <p style="font-size:12px;color:#475569;">USER_GUIDE.md の取得に失敗しました (${String(e.message || e)})。</p>
-                <p style="font-size:12px;color:#475569;">代わりに <a href="../USER_GUIDE.md" target="_blank" rel="noopener">こちらから直接ダウンロード</a>してご覧ください。</p>
-                <div class="modal-actions"><button type="button" class="btn primary" data-modal-cancel>Close</button></div>`;
-            return openModal(html);
+            const fallbackHtml = `
+                <h2>${cfg.errTitle}</h2>
+                <p style="font-size:12px;color:#475569;">${cfg.errBody(String(e.message || e))}</p>
+                <p style="font-size:12px;color:#475569;"><a href="${cfg.path}" target="_blank" rel="noopener">${cfg.path}</a></p>
+                <div class="modal-actions"><button type="button" class="btn primary" data-modal-cancel>${cfg.closeLabel}</button></div>`;
+            return openModal(fallbackHtml);
         }
     }
     let bodyHtml;
@@ -3698,16 +3712,30 @@ async function openHelpModal() {
         console.error('Markdown render failed', e);
         bodyHtml = '<pre>' + String(md).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>';
     }
+    const tabBtn = (key, active) =>
+        `<button type="button" data-help-lang="${key}" style="padding:3px 10px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;cursor:pointer;background:${active ? '#2563eb' : '#fff'};color:${active ? '#fff' : '#1e293b'};">${_helpGuideSources[key].label}</button>`;
     const html = `
-        <h2>DESI Data Share — User Guide</h2>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
+          <h2 style="margin:0;">${cfg.title}</h2>
+          <div style="display:flex;gap:4px;">${tabBtn('ja', lang === 'ja')}${tabBtn('en', lang === 'en')}</div>
+        </div>
         <div class="help-body">${bodyHtml}</div>
         <div class="modal-actions" style="position:sticky;bottom:0;background:#fff;padding-top:8px;">
-          <a class="btn" href="../USER_GUIDE.md" target="_blank" rel="noopener">新しいタブで開く</a>
-          <button type="button" class="btn primary" data-modal-cancel>Close</button>
+          <a class="btn" href="${cfg.path}" target="_blank" rel="noopener">${cfg.openLabel}</a>
+          <button type="button" class="btn primary" data-modal-cancel>${cfg.closeLabel}</button>
         </div>`;
     const p = openModal(html);
-    // Widen the card. openModal._card is the just-created card element.
-    if (openModal._card) openModal._card.classList.add('help-card');
+    if (openModal._card) {
+        openModal._card.classList.add('help-card');
+        openModal._card.querySelectorAll('[data-help-lang]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const next = btn.getAttribute('data-help-lang');
+                if (next === lang) return;
+                if (openModal._card && openModal._card._close) openModal._card._close(null);
+                openHelpModal(next).catch(e => console.error(e));
+            });
+        });
+    }
     return p;
 }
 
