@@ -11,6 +11,13 @@
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script>
+  window.SUPABASE_URL     = "https://pxlrlhtcvwkqnlryencs.supabase.co";
+  window.SUPABASE_ANON_KEY = "sb_publishable_2K4sqMmKk3g20Jmwho-awQ_Uu_hSKeU";
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
     <style>
 html, body { margin: 0; padding: 0; overflow: hidden; height: 100vh; }
 body { font-family: 'Inter', sans-serif; background-color: #f4f4f5; }
@@ -20,6 +27,23 @@ body { font-family: 'Inter', sans-serif; background-color: #f4f4f5; }
 .btn.primary:hover { background:#1d4ed8; }
 .btn.danger { background:#fee2e2; color:#b91c1c; border-color:#fca5a5; }
 .btn:disabled { opacity:0.5; cursor:not-allowed; }
+/* Share-Only mode: hide every entry point that mutates the project
+   skeleton (sections / files / memo). Per-layer ROI editing remains
+   available but is gated by an exclusive lock at the JS layer. */
+body.share-mode #btn-new-project,
+body.share-mode #btn-import-zip,
+body.share-mode #btn-add-section,
+body.share-mode #btn-delete-project,
+body.share-mode #btn-publish-share,
+body.share-mode .project-picker-wrap,
+body.share-mode #project-name-input,
+body.share-mode #tb-add-heif,
+body.share-mode #tb-add-msi,
+body.share-mode #tb-del-section { display:none !important; }
+body.share-mode #share-mode-banner { display:flex !important; }
+body.share-mode .picker-row .picker-row-dot,
+body.share-mode .picker-row .picker-row-rename { display:none !important; }
+#share-mode-banner { display:none; align-items:center; gap:6px; padding:2px 8px; background:#dbeafe; color:#1d4ed8; font-size:11px; border-radius:3px; margin-right:6px; }
 .modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:60; display:flex; align-items:center; justify-content:center; }
 .modal-card { background:#fff; border-radius:8px; box-shadow:0 12px 30px rgba(0,0,0,0.2); padding:18px; width:480px; max-width:92vw; max-height:88vh; overflow-y:auto; }
 .modal-card h2 { font-size:14px; font-weight:600; margin-bottom:10px; color:#0f172a; }
@@ -171,6 +195,9 @@ body.splitting-v { cursor:row-resize !important; }
             <input id="project-name-input" type="text" class="text-xs border border-gray-300 rounded px-2 py-1 bg-white min-w-0 flex-1 max-w-[300px]" placeholder="Project name" />
         </div>
         <div class="flex items-center gap-2 shrink-0">
+            <div id="share-mode-banner" title="Read-only Share mode. ROI editing requires acquiring an exclusive lock.">
+                <span>🔒</span><span>Share view</span>
+            </div>
             <div id="view-mode-toggle" class="flex items-center text-[11px] border border-gray-300 rounded overflow-hidden" title="Compound mode focuses on a single MSI compound across all sections; Free shows every visible layer per section.">
                 <button data-mode="free" class="px-2 py-1 bg-white text-gray-700">Free</button>
                 <button data-mode="compound" class="px-2 py-1 bg-blue-600 text-white">Compound</button>
@@ -178,6 +205,7 @@ body.splitting-v { cursor:row-resize !important; }
             <button id="btn-new-project" class="btn">New</button>
             <button id="btn-import-zip" class="btn">Import ZIP</button>
             <button id="btn-export-zip" class="btn">Export ZIP</button>
+            <button id="btn-publish-share" class="btn" title="Upload this project to Supabase and get a shareable URL">Publish to share</button>
             <button id="btn-add-section" class="btn primary" title="Add a tissue section panel">+ Section</button>
             <button id="btn-delete-project" class="btn danger" title="Delete current project">Delete</button>
         </div>
@@ -2575,7 +2603,8 @@ function renderMemoForm() {
         const el = document.getElementById(domId);
         if (!el) continue;
         el.value = memo[key] || '';
-        el.disabled = !project;
+        // Share-Only viewers can read the memo but not edit it.
+        el.disabled = !project || !!App.shareMode;
     }
 }
 
@@ -2929,6 +2958,35 @@ function openModal(html) {
         // expose card to caller via window for advanced wiring
         openModal._card = card;
     });
+}
+
+// Password gate for shared projects. Resolves to the entered password
+// or null if the user closed the modal.
+function openShareUnlockModal(slug) {
+    const safeSlug = String(slug || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const html = `
+        <h2>共有プロジェクト</h2>
+        <form>
+          <p style="font-size:11px;color:#475569;margin-bottom:6px;">
+            <code>${safeSlug}</code> の閲覧パスワードを入力してください。
+          </p>
+          <label>Password
+            <input type="password" name="pw" required autocomplete="current-password">
+          </label>
+          <p data-err style="color:#b91c1c;font-size:11px;min-height:14px;"></p>
+          <div class="modal-actions">
+            <button type="button" class="btn" data-modal-cancel>Cancel</button>
+            <button type="submit" class="btn primary" data-modal-ok>Unlock</button>
+          </div>
+        </form>`;
+    const p = openModal(html);
+    const card = openModal._card;
+    card._collect = () => {
+        const pw = (card.querySelector('[name="pw"]').value || '').trim();
+        if (!pw) { card.querySelector('[data-err]').textContent = 'パスワードが必要です'; return null; }
+        return pw;
+    };
+    return p;
 }
 
 const Wizards = {
@@ -3448,6 +3506,156 @@ async function tryAppendUserRoiColumns(srcBlob, section, msiEnt, project) {
     }
 }
 
+// Publish the active local project to Supabase so a shareable URL can be
+// distributed. The flow is:
+//   1. Confirm Supabase is configured.
+//   2. Ask the maintainer for slug + viewer / admin passwords.
+//   3. Upload every blob (HE/IF TIFFs, MSI xlsx/txt) into the public
+//      `atlases` bucket under `<slug>/<sectionId>/<filename>`.
+//   4. Call upsert_project_doc which (re)creates rows in projects /
+//      sections / rois with the supplied passwords.
+//   5. Show the resulting `<host>#share=<slug>` URL in a copyable form.
+async function publishProjectToShare() {
+    const project = App.project;
+    if (!project) { showToast('プロジェクトを開いてから実行してください'); return; }
+    if (!SupabaseClient.configured()) {
+        alert('Supabase が未設定です。supabase/README.md を見て URL / anon key を埋め込んでください。');
+        return;
+    }
+    const meta = await openPublishMetaModal(project);
+    if (!meta) return;
+
+    showToast('Supabase へアップロード中...', 1800);
+    try {
+        // Upload every blob to Storage under a per-project prefix. Build a
+        // section-by-section map of the resulting paths so the publish RPC
+        // can persist them alongside the section meta.
+        const sectionsPayload = [];
+        for (const sec of project.sections) {
+            const storage = { images: {}, msiSeries: {} };
+            const upload = async (blobId, kindFolder, key, ent) => {
+                if (!blobId) return null;
+                const blob = await ProjectStorage.getBlob(blobId);
+                if (!blob || !blob.blob) return null;
+                const filename = (ent && ent.filename) || (blob.filename) || (key + '.bin');
+                const path = `${meta.slug}/${sec.id}/${kindFolder}/${blobId}__${filename}`;
+                await SupabaseClient.uploadBlob('atlases', path, blob.blob, blob.mime || (ent && ent.mime));
+                return { path, mime: blob.mime || (ent && ent.mime), filename };
+            };
+            for (const [k, ent] of Object.entries(sec.images || {})) {
+                const ref = await upload(ent.blobId, 'images', k, ent);
+                if (ref) storage.images[k] = ref;
+            }
+            for (const [k, ent] of Object.entries(sec.msiSeries || {})) {
+                const ref = await upload(ent.blobId, 'msi', k, ent);
+                if (ref) storage.msiSeries[k] = Object.assign({}, ent, ref);
+            }
+            sectionsPayload.push({
+                id: sec.id,
+                ordinal: sec.ordinal || 0,
+                displayName: sec.displayName || ('Section ' + (sec.ordinal || '')),
+                meta: sec.meta || {},
+                storagePaths: storage,
+            });
+        }
+
+        const roisPayload = (project.rois || []).flatMap(r => {
+            const polys = r.polysBySection || {};
+            return Object.entries(polys).map(([sectionId, polyMsi]) => ({
+                sectionId,
+                colorKey: r.colorKey || 'default',
+                name: r.name || '',
+                polyMsi,
+                createdBy: 'master',
+                version: r.version || 1,
+            }));
+        });
+
+        const args = {
+            _slug: meta.slug,
+            _display_name: project.displayName || meta.slug,
+            _meta: { anatomyPalette: project.anatomyPalette || {}, memo: project.memo || {} },
+            _viewer_pw: meta.viewerPassword,
+            _admin_pw: meta.adminPassword || null,
+            _sections: sectionsPayload,
+            _rois: roisPayload,
+        };
+        const result = await SupabaseClient.upsertProjectDoc(args);
+        if (!result || result.ok !== true) {
+            throw new Error(result && result.reason ? result.reason : 'upsert_failed');
+        }
+        const url = `${location.origin}${location.pathname}#share=${encodeURIComponent(meta.slug)}`;
+        await openPublishResultModal(url, meta.slug);
+    } catch (e) {
+        console.error('publish failed', e);
+        alert('Publish に失敗しました: ' + (e.message || e));
+    }
+}
+
+async function openPublishMetaModal(project) {
+    const safe = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const guess = (project.displayName || 'project').toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'project';
+    const html = `
+        <h2>Publish to share</h2>
+        <form>
+          <label>Project slug (URL identifier)
+            <input type="text" name="slug" value="${safe(guess)}" pattern="[A-Za-z0-9_-]+" required>
+          </label>
+          <label>Viewer password (受け手が入力するもの)
+            <input type="password" name="viewer_pw" required minlength="4">
+          </label>
+          <label>Admin password (任意)
+            <input type="password" name="admin_pw" minlength="4">
+          </label>
+          <p style="font-size:11px;color:#475569;">
+            ※ 同じ slug で再 publish するとサーバ側のプロジェクトは丸ごと上書きされます。
+          </p>
+          <p data-err style="color:#b91c1c;font-size:11px;min-height:14px;"></p>
+          <div class="modal-actions">
+            <button type="button" class="btn" data-modal-cancel>Cancel</button>
+            <button type="submit" class="btn primary" data-modal-ok>Publish</button>
+          </div>
+        </form>`;
+    const p = openModal(html);
+    const card = openModal._card;
+    card._collect = () => {
+        const slug = (card.querySelector('[name="slug"]').value || '').trim();
+        const viewerPw = (card.querySelector('[name="viewer_pw"]').value || '').trim();
+        const adminPw = (card.querySelector('[name="admin_pw"]').value || '').trim();
+        if (!/^[A-Za-z0-9_-]+$/.test(slug)) { card.querySelector('[data-err]').textContent = 'slug は英数字 / _ / - のみ'; return null; }
+        if (viewerPw.length < 4) { card.querySelector('[data-err]').textContent = 'viewer password は 4 文字以上'; return null; }
+        return { slug, viewerPassword: viewerPw, adminPassword: adminPw || null };
+    };
+    return p;
+}
+
+function openPublishResultModal(url, slug) {
+    const safe = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const html = `
+        <h2>Share URL を発行しました</h2>
+        <p style="font-size:12px;color:#1f2937;">下記 URL を共同研究者に渡してください。viewer password も別途共有が必要です。</p>
+        <input type="text" readonly value="${safe(url)}" style="width:100%;padding:6px;font-size:12px;border:1px solid #cbd5e1;border-radius:3px;background:#f8fafc;" data-share-url>
+        <div class="modal-actions">
+          <button type="button" class="btn" data-copy-url>Copy URL</button>
+          <button type="button" class="btn primary" data-modal-cancel>Close</button>
+        </div>`;
+    const p = openModal(html);
+    const card = openModal._card;
+    const copyBtn = card.querySelector('[data-copy-url]');
+    const inp = card.querySelector('[data-share-url]');
+    copyBtn.addEventListener('click', async () => {
+        try {
+            inp.select();
+            await navigator.clipboard.writeText(url);
+            copyBtn.textContent = 'Copied ✓';
+        } catch (e) {
+            inp.select(); document.execCommand('copy');
+            copyBtn.textContent = 'Copied ✓';
+        }
+    });
+    return p;
+}
+
 async function importZipFile(file) {
     const zip = await JSZip.loadAsync(file);
     const projDocFile = zip.file('project.json');
@@ -3757,11 +3965,86 @@ const Toolbar = {
     },
 };
 
+// =============================================================
+// Supabase wiring for the read-only "Share" mode. The constants below
+// are filled in by the maintainer after running supabase/schema.sql +
+// supabase/share_locks.sql in their Supabase project. When either is
+// blank the app silently stays in pure-local Master mode and every
+// share-only entrypoint becomes a no-op.
+// =============================================================
+const SUPABASE_URL = window.SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY || '';
+
+const SupabaseClient = (() => {
+    let client = null;
+    let lastError = null;
+
+    function _client() {
+        if (client) return client;
+        if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+        if (typeof supabase === 'undefined' || !supabase.createClient) {
+            console.warn('supabase-js failed to load; share mode disabled.');
+            return null;
+        }
+        client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+            auth: { persistSession: false },
+        });
+        return client;
+    }
+
+    async function rpc(name, args) {
+        const c = _client();
+        if (!c) throw new Error('supabase_not_configured');
+        const { data, error } = await c.rpc(name, args || {});
+        if (error) { lastError = error; throw error; }
+        return data;
+    }
+
+    return {
+        configured() { return !!_client(); },
+        lastError() { return lastError; },
+        // Auth -------------------------------------------------
+        unlockProject(slug, password) { return rpc('unlock_project', { p_slug: slug, p_password: password }); },
+        // Read paths -------------------------------------------
+        fetchProjectDoc(token) { return rpc('get_project_doc', { p_token: token }); },
+        listRois(token, sectionId) { return rpc('list_rois', { p_token: token, p_section_id: sectionId || null }); },
+        // ROI write paths --------------------------------------
+        createRoi(token, payload) { return rpc('create_roi', { p_token: token, ...payload }); },
+        updateRoi(token, roiId, expectedVersion, payload) {
+            return rpc('update_roi', { p_token: token, p_roi_id: roiId, p_expected_version: expectedVersion, ...payload });
+        },
+        deleteRoi(token, roiId) { return rpc('delete_roi', { p_token: token, p_roi_id: roiId }); },
+        // Lock -------------------------------------------------
+        acquireRoiLock(token, label) { return rpc('acquire_roi_lock', { _token: token, _label: label || null }); },
+        heartbeatRoiLock(token) { return rpc('heartbeat_roi_lock', { _token: token }); },
+        releaseRoiLock(token) { return rpc('release_roi_lock', { _token: token }); },
+        // Master publish ---------------------------------------
+        upsertProjectDoc(args) { return rpc('upsert_project_doc', args); },
+        // Storage ----------------------------------------------
+        async uploadBlob(bucket, path, blob, contentType) {
+            const c = _client(); if (!c) throw new Error('supabase_not_configured');
+            const { error } = await c.storage.from(bucket).upload(path, blob, {
+                upsert: true,
+                contentType: contentType || blob.type || 'application/octet-stream',
+            });
+            if (error) throw error;
+            return path;
+        },
+        publicUrl(bucket, path) {
+            const c = _client(); if (!c) return null;
+            const { data } = c.storage.from(bucket).getPublicUrl(path);
+            return data && data.publicUrl;
+        },
+    };
+})();
+
 const App = {
     project: null,
     panels: new Map(),       // sectionId -> SectionPanel
     activeSectionId: null,
     activeRoiId: null,
+    // Share-Only mode: { slug, role, token, expiresAt } when active, null in Master mode.
+    shareMode: null,
     drawing: { mode: false, sectionId: null, vertices: [], targetRoiId: null },
     saveTimer: 0,
     // Shared thumb-row height across every section panel (px). The
@@ -3923,6 +4206,24 @@ const App = {
         const grid = document.getElementById('sections-grid');
         if (grid) grid.style.setProperty('--thumb-h', this.thumbHeight + 'px');
         this.setupGlobalSectionSplitter();
+
+        // If the URL hash advertises a shared project (`#share=<slug>`), enter
+        // Share-Only mode: skip the local project picker, prompt for the
+        // project password, and hydrate from Supabase. Otherwise behave as a
+        // normal Master client backed by IndexedDB.
+        const shareSlug = this._readShareSlug();
+        if (shareSlug) {
+            this.wireUi();
+            try {
+                await this.bootstrapShareMode(shareSlug);
+            } catch (e) {
+                console.error('share bootstrap failed', e);
+                this.renderEmpty();
+                showToast('共有プロジェクトの読み込みに失敗しました: ' + (e && e.message || e));
+            }
+            return;
+        }
+
         await this.refreshProjectPicker();
         const last = localStorage.getItem('desi:lastProjectId');
         if (last) {
@@ -3932,6 +4233,141 @@ const App = {
             this.renderEmpty();
         }
         this.wireUi();
+    },
+
+    _readShareSlug() {
+        try {
+            const h = (location.hash || '').replace(/^#/, '');
+            if (!h) return null;
+            const params = new URLSearchParams(h);
+            const slug = params.get('share');
+            return slug ? slug.trim() : null;
+        } catch (e) { return null; }
+    },
+
+    // Show the password modal, exchange it for a session token, then pull the
+    // project document + ROI list and lay them out exactly like a local
+    // project. The HE/IF/MSI binaries are downloaded from Supabase Storage on
+    // demand; nothing is persisted to IndexedDB so closing the tab clears
+    // the cache.
+    async bootstrapShareMode(slug) {
+        if (!SupabaseClient.configured()) {
+            showToast('Share モードは設定されていません (SUPABASE_URL / ANON_KEY 未設定)');
+            this.renderEmpty();
+            return;
+        }
+        document.body.classList.add('share-mode');
+        const stored = (() => {
+            try {
+                const raw = sessionStorage.getItem('desi:share:' + slug);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                if (parsed && parsed.expiresAt && new Date(parsed.expiresAt).getTime() > Date.now()) return parsed;
+            } catch (e) {}
+            return null;
+        })();
+
+        let session = stored;
+        if (!session) {
+            const password = await openShareUnlockModal(slug);
+            if (!password) { this.renderEmpty(); return; }
+            const result = await SupabaseClient.unlockProject(slug, password);
+            if (!result || !result.token) {
+                showToast('パスワードが違います');
+                this.renderEmpty();
+                return;
+            }
+            session = { slug, token: result.token, role: result.role || 'viewer', expiresAt: result.expires_at };
+            try { sessionStorage.setItem('desi:share:' + slug, JSON.stringify(session)); } catch (e) {}
+        }
+
+        this.shareMode = session;
+        await this._hydrateSharedProject(session);
+    },
+
+    async _hydrateSharedProject(session) {
+        const doc = await SupabaseClient.fetchProjectDoc(session.token);
+        if (!doc) { showToast('Share project の取得に失敗しました'); return; }
+        // The RPC returns { id, slug, displayName, anatomyPalette, sections[], meta }.
+        // Sections must already carry storage paths so the client can fetch
+        // each blob via Storage public URL.
+        const project = {
+            id: doc.id || ('proj_share_' + session.slug),
+            displayName: doc.display_name || doc.displayName || session.slug,
+            anatomyPalette: doc.anatomy_palette || doc.anatomyPalette || {},
+            sections: (doc.sections || []).map(s => ({
+                id: s.client_id || s.id,
+                ordinal: s.ordinal,
+                displayName: s.display_name || s.displayName || ('Section ' + s.ordinal),
+                meta: s.meta || {},
+                images: {},
+                msiSeries: {},
+                msiFiles: {},
+            })),
+            rois: [],
+            roiHidden: {},
+            memo: doc.memo || ensureMemoShape(),
+            createdAt: doc.created_at || nowIso(),
+            updatedAt: doc.updated_at || nowIso(),
+            __share: true,
+        };
+
+        // Pull blobs referenced in storage_paths, drop them into IndexedDB
+        // (so the existing rendering pipeline can address them by blobId),
+        // and rebuild section.images / msiSeries entries.
+        for (let i = 0; i < project.sections.length; i++) {
+            const sec = project.sections[i];
+            const sp = (doc.sections[i] && doc.sections[i].storage_paths) || (doc.sections[i] && doc.sections[i].storagePaths) || {};
+            // images: { HE_Stain: { path, mime, filename }, ... }
+            for (const [key, ref] of Object.entries(sp.images || {})) {
+                try {
+                    const url = SupabaseClient.publicUrl('atlases', ref.path);
+                    const blob = await (await fetch(url)).blob();
+                    const blobId = uid('blob');
+                    await ProjectStorage.putBlob({ id: blobId, blob, mime: ref.mime || blob.type, filename: ref.filename || ref.path.split('/').pop() });
+                    sec.images[key] = { blobId, mime: ref.mime || blob.type, filename: ref.filename };
+                } catch (e) { console.warn('share blob fetch failed', key, e); }
+            }
+            for (const [key, ref] of Object.entries(sp.msiSeries || {})) {
+                try {
+                    const url = SupabaseClient.publicUrl('atlases', ref.path);
+                    const blob = await (await fetch(url)).blob();
+                    const blobId = uid('blob');
+                    await ProjectStorage.putBlob({ id: blobId, blob, mime: ref.mime || blob.type, filename: ref.filename || ref.path.split('/').pop() });
+                    sec.msiSeries[key] = Object.assign({}, ref, { blobId });
+                    if (ref.sourceFileId && !sec.msiFiles[ref.sourceFileId]) {
+                        sec.msiFiles[ref.sourceFileId] = { id: ref.sourceFileId, kind: ref.kind, filename: ref.filename, blobId };
+                    }
+                } catch (e) { console.warn('share msi fetch failed', key, e); }
+            }
+        }
+
+        // Hydrate ROIs.
+        try {
+            const rois = await SupabaseClient.listRois(session.token);
+            project.rois = (rois || []).map(r => ({
+                id: r.id,
+                colorKey: r.color_key,
+                name: r.name,
+                rgba: r.rgba || [255, 0, 0, 200],
+                polysBySection: r.polys_by_section || {},
+                version: r.version,
+                serverId: r.id,
+            }));
+        } catch (e) { console.warn('share ROI fetch failed', e); }
+
+        this.project = project;
+        document.getElementById('project-name-input').value = project.displayName || '';
+        document.getElementById('project-name-input').disabled = true;
+        document.getElementById('section-count').textContent = project.sections.length + ' sections';
+        document.getElementById('sections-empty').classList.toggle('hidden', project.sections.length > 0);
+        await this.rebuildSectionPanels();
+        populateRoiList();
+        setupGraphSelector();
+        this.refreshAnalysisScope();
+        renderMemoForm();
+        this.renderAnalysis();
+        Toolbar.refreshAll();
     },
 
     renderEmpty() {
@@ -4107,9 +4543,17 @@ const App = {
     },
 
     // ---- ROI drawing ----
-    startDrawing(targetRoiId) {
+    async startDrawing(targetRoiId) {
         if (!this.project) return;
         if (!this.activeSectionId) { showToast('まず切片パネルをクリックしてアクティブにしてください'); return; }
+        // In Share-Only mode, ROI editing is gated behind a server-side
+        // exclusive lock so only one viewer can write at a time. Acquire
+        // it before flipping the local UI into draw mode; bail out with a
+        // toast if someone else holds it.
+        if (this.shareMode) {
+            const ok = await this._tryAcquireRoiLock();
+            if (!ok) return;
+        }
         this.drawing.mode = true;
         this.drawing.sectionId = this.activeSectionId;
         this.drawing.vertices = [];
@@ -4130,6 +4574,34 @@ const App = {
         document.getElementById('roi-draw-hint').classList.add('hidden');
         this.panels.forEach(p => p.setDrawingPointerActive(false));
         this.redrawAllRois();
+        if (this.shareMode) this._releaseRoiLock();
+    },
+
+    async _tryAcquireRoiLock() {
+        if (!this.shareMode || !this.shareMode.token) return true;
+        try {
+            const res = await SupabaseClient.acquireRoiLock(this.shareMode.token, this.shareMode.label || null);
+            if (!res || res.ok !== true) {
+                const seen = res && res.last_seen ? new Date(res.last_seen).toLocaleTimeString() : '?';
+                showToast('他のユーザーが ROI を編集中です (last seen ' + seen + ')', 3000);
+                return false;
+            }
+            // Heartbeat every 5 s so the server keeps treating us as active.
+            this._roiLockHeartbeat = setInterval(() => {
+                SupabaseClient.heartbeatRoiLock(this.shareMode.token).catch(() => {});
+            }, 5000);
+            return true;
+        } catch (e) {
+            console.warn('ROI lock acquire failed', e);
+            showToast('ROI ロックの取得に失敗しました');
+            return false;
+        }
+    },
+
+    _releaseRoiLock() {
+        if (this._roiLockHeartbeat) { clearInterval(this._roiLockHeartbeat); this._roiLockHeartbeat = null; }
+        if (!this.shareMode || !this.shareMode.token) return;
+        SupabaseClient.releaseRoiLock(this.shareMode.token).catch(() => {});
     },
 
     async finalizeDrawing() {
@@ -4161,17 +4633,53 @@ const App = {
         populateRoiList();
         this.redrawAllRois();
         this.renderAnalysis();
-        await this.queueSave(0);
+        // In Share mode the local IndexedDB is just an ephemeral cache;
+        // persistence happens server-side through the create_roi RPC.
+        // Master mode keeps using queueSave to write IDB.
+        if (this.shareMode) {
+            try {
+                const payload = {
+                    p_section_id: sectionId,
+                    p_color_key: roi.colorKey,
+                    p_name: roi.name,
+                    p_poly_msi: verts,
+                    p_created_by: 'viewer',
+                };
+                const rec = await SupabaseClient.createRoi(this.shareMode.token, payload);
+                if (rec && rec.id) { roi.serverId = rec.id; roi.version = rec.version; }
+            } catch (e) {
+                console.warn('Share: create_roi failed', e);
+                showToast('ROI のサーバ保存に失敗しました');
+            }
+        } else {
+            await this.queueSave(0);
+        }
     },
 
-    deleteRoi(id) {
+    async deleteRoi(id) {
         if (!confirm('この ROI を削除しますか?')) return;
+        const target = (this.project.rois || []).find(r => r.id === id);
+        if (this.shareMode) {
+            const ok = await this._tryAcquireRoiLock();
+            if (!ok) return;
+            try {
+                if (target && target.serverId) {
+                    await SupabaseClient.deleteRoi(this.shareMode.token, target.serverId);
+                }
+            } catch (e) {
+                console.warn('Share: delete_roi failed', e);
+                showToast('ROI のサーバ削除に失敗しました');
+                this._releaseRoiLock();
+                return;
+            }
+            this._releaseRoiLock();
+        }
         this.project.rois = (this.project.rois || []).filter(r => r.id !== id);
         if (this.activeRoiId === id) this.activeRoiId = null;
         populateRoiList();
         this.redrawAllRois();
         this.renderAnalysis();
-        this.queueSave(0);
+        if (!this.shareMode) this.queueSave(0);
     },
 
     // ---- Persistence ----
@@ -4206,6 +4714,8 @@ const App = {
         document.getElementById('btn-delete-project').addEventListener('click', () => this.deleteCurrentProject());
         document.getElementById('btn-add-section').addEventListener('click', () => this.addSection());
         document.getElementById('btn-export-zip').addEventListener('click', () => exportProjectAsZip());
+        const publishBtn = document.getElementById('btn-publish-share');
+        if (publishBtn) publishBtn.addEventListener('click', () => publishProjectToShare());
         document.getElementById('btn-import-zip').addEventListener('click', () => document.getElementById('hidden-import-input').click());
         document.getElementById('hidden-import-input').addEventListener('change', async (e) => {
             const f = e.target.files[0];
@@ -4217,6 +4727,13 @@ const App = {
         document.getElementById('roi-draw-toggle').addEventListener('click', () => {
             if (this.drawing.mode) this.cancelDrawing();
             else this.startDrawing(null);
+        });
+        // Best-effort lock cleanup on tab close so stale locks don't strand
+        // other viewers for the full 30 s heartbeat window.
+        window.addEventListener('beforeunload', () => {
+            if (this.shareMode && this._roiLockHeartbeat) {
+                try { SupabaseClient.releaseRoiLock(this.shareMode.token); } catch (e) {}
+            }
         });
         document.getElementById('roi-toggle').addEventListener('change', () => this.redrawAllRois());
         document.addEventListener('keydown', (e) => {
