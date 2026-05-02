@@ -74,6 +74,11 @@
 // ===========================================================================
 // IndexedDB helpers — minimal subset of viewer/index.html's ProjectStorage.
 // We only need to list / read / delete project rows (no blobs) here.
+// ---
+// IMPORTANT: keep DB_VERSION in sync with viewer/index.html. Both pages
+// open the same `desi-projects` database; bumping the version here and
+// not there raises "The requested version (X) is less than the existing
+// version (Y)" on whichever page lags behind.
 // ===========================================================================
 const ProjectStorage = (() => {
     const DB_NAME = 'desi-projects';

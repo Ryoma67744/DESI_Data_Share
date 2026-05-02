@@ -627,9 +627,15 @@ function readFileAsText(file) {
 // =============================================================
 // ProjectStorage  - IndexedDB (object stores: projects, blobs)
 // =============================================================
+// IMPORTANT: keep DB_VERSION here in sync with the version used in the
+// root index.html (the project management page). Both pages open the
+// same `desi-projects` database; if the manager opens it at v2 and this
+// file requests v1, IndexedDB raises "The requested version (1) is less
+// than the existing version (2)". When you change the schema, bump the
+// number in BOTH files.
 const ProjectStorage = (() => {
     const DB_NAME = 'desi-projects';
-    const DB_VERSION = 1;
+    const DB_VERSION = 2;
     let dbPromise = null;
 
     function open() {
