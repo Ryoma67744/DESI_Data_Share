@@ -104,11 +104,100 @@ alter table public.projects add column if not exists updated_at timestamptz not 
 alter table public.projects add column if not exists meta jsonb not null default '{}'::jsonb;
 alter table public.rois     add column if not exists name        text;
 
+-- ---- 2b. Master credential (Phase 1) ------------------------
+-- Single-row table holding the bcrypt-hashed master password. All
+-- write-side RPCs and Storage write policies validate against this row
+-- so a leaked anon key alone is not enough to mutate published data.
+--
+-- BOOTSTRAP (run once in the Supabase SQL Editor after applying this
+-- migration):
+--     select public.set_master_password('MSIadomine');
+-- Replace the literal with whatever long master password you prefer
+-- (8 chars minimum). Re-running rotates the password.
+create table if not exists public.master_credentials (
+    id            int primary key check (id = 1),
+    password_hash text not null,
+    updated_at    timestamptz not null default now()
+);
+alter table public.master_credentials enable row level security;
+revoke all on public.master_credentials from anon, authenticated;
+
+create or replace function public.set_master_password(_pw text)
+returns void
+language plpgsql security definer set search_path = public, extensions
+as $$
+begin
+    if _pw is null or length(_pw) < 8 then
+        raise exception 'master password must be at least 8 characters';
+    end if;
+    insert into public.master_credentials(id, password_hash)
+        values (1, crypt(_pw, gen_salt('bf')))
+    on conflict (id) do update
+        set password_hash = excluded.password_hash, updated_at = now();
+end
+$$;
+revoke all on function public.set_master_password(text) from public, anon, authenticated;
+
+create or replace function public._verify_master_pw(_pw text)
+returns boolean
+language sql security definer set search_path = public, extensions
+as $$
+    select exists (
+        select 1 from public.master_credentials
+         where id = 1 and password_hash = crypt(_pw, password_hash)
+    );
+$$;
+revoke all on function public._verify_master_pw(text) from public, anon, authenticated;
+
+-- ---- 2c. Publish session token (Phase 1) ---------------------
+-- Short-lived per-publish ticket. Issued by request_publish_session()
+-- after master-pw verification, then sent as the "x-publish-token"
+-- header on Storage upload requests. Storage RLS policy below validates
+-- the token + slug match before allowing the write.
+create table if not exists public.publish_sessions (
+    token       text primary key,
+    slug        text not null,
+    expires_at  timestamptz not null
+);
+alter table public.publish_sessions enable row level security;
+revoke all on public.publish_sessions from anon, authenticated;
+
+create or replace function public.request_publish_session(_master_pw text, _slug text)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions
+as $$
+declare
+    v_token   text;
+    v_expires timestamptz;
+begin
+    if not public._verify_master_pw(_master_pw) then
+        raise exception 'unauthorized' using errcode = '28000';
+    end if;
+    if _slug is null or length(trim(_slug)) = 0 then
+        raise exception 'slug required';
+    end if;
+    -- Garbage-collect expired tokens opportunistically.
+    delete from public.publish_sessions where expires_at < now();
+    v_token   := encode(gen_random_bytes(24), 'hex');
+    v_expires := now() + interval '1 hour';
+    insert into public.publish_sessions(token, slug, expires_at)
+         values (v_token, _slug, v_expires);
+    return jsonb_build_object('token', v_token, 'slug', _slug, 'expires_at', v_expires);
+end
+$$;
+grant execute on function public.request_publish_session(text, text) to anon, authenticated;
+
 -- ---- 3. upsert_project_doc: Master-side publish helper ------
 -- Pushes the entire project document (meta + sections + rois) plus
 -- a fresh viewer/admin password set, in one transaction. Designed to
 -- be called once per "Publish to share" click.
+-- Phase 1 added _master_pw as the first argument; the previous (7-arg)
+-- signature must be dropped explicitly because CREATE OR REPLACE doesn't
+-- replace functions whose argument list changed.
+drop function if exists public.upsert_project_doc(text, text, jsonb, text, text, jsonb, jsonb);
+
 create or replace function public.upsert_project_doc(
+    _master_pw     text,
     _slug          text,
     _display_name  text,
     _meta          jsonb,
@@ -129,6 +218,11 @@ begin
     end if;
     if _viewer_pw is null or length(_viewer_pw) < 4 then
         return jsonb_build_object('ok', false, 'reason', 'viewer_password_required');
+    end if;
+    -- Master credential check (Phase 1). Even if the anon key is leaked,
+    -- this RPC will refuse to write without the master password.
+    if not public._verify_master_pw(_master_pw) then
+        raise exception 'unauthorized' using errcode = '28000';
     end if;
 
     insert into public.projects(slug, display_name, anatomy_palette, meta)
@@ -202,7 +296,7 @@ begin
 end;
 $$;
 
-grant execute on function public.upsert_project_doc(text, text, jsonb, text, text, jsonb, jsonb) to anon, authenticated;
+grant execute on function public.upsert_project_doc(text, text, text, jsonb, text, text, jsonb, jsonb) to anon, authenticated;
 
 -- ---- 4. Storage policies for the `atlases` bucket -----------
 -- schema.sql creates the bucket with `public = true`, which only governs
@@ -217,8 +311,24 @@ grant execute on function public.upsert_project_doc(text, text, jsonb, text, tex
 -- only the anon key; this matches that trust model (anyone who can
 -- reach the page can already publish, and the bucket is already
 -- public-read by design).
+-- Phase 1 (write policies): replace the wide-open anon write policies
+-- with publish-token-gated ones. Reads are still public — the bucket is
+-- public-read by design and signed-URL reads are deferred to Phase 2.
 do $$
 begin
+    -- Drop the legacy "anyone with the anon key can write" policies.
+    if exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='atlases anon insert') then
+        drop policy "atlases anon insert" on storage.objects;
+    end if;
+    if exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='atlases anon update') then
+        drop policy "atlases anon update" on storage.objects;
+    end if;
+    if exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='atlases anon delete') then
+        drop policy "atlases anon delete" on storage.objects;
+    end if;
+
+    -- Read stays public (bucket is public:true, plus an explicit anon
+    -- SELECT policy so signed-URL fetches and direct GETs both work).
     if not exists (
         select 1 from pg_policies
          where schemaname = 'storage' and tablename = 'objects'
@@ -228,33 +338,54 @@ begin
             for select to anon, authenticated
             using (bucket_id = 'atlases');
     end if;
+
+    -- Write policies require an x-publish-token header that maps to a
+    -- non-expired publish_sessions row whose slug prefixes the path.
+    -- request.headers is provided by Supabase's request middleware as a
+    -- jsonb; the nullif guard avoids errors when the header is missing.
     if not exists (
         select 1 from pg_policies
          where schemaname = 'storage' and tablename = 'objects'
-           and policyname = 'atlases anon insert'
+           and policyname = 'atlases publish-token insert'
     ) then
-        create policy "atlases anon insert" on storage.objects
+        create policy "atlases publish-token insert" on storage.objects
             for insert to anon, authenticated
-            with check (bucket_id = 'atlases');
+            with check (
+                bucket_id = 'atlases'
+                and exists (
+                    select 1 from public.publish_sessions ps
+                     where ps.token = nullif(current_setting('request.headers', true), '')::jsonb->>'x-publish-token'
+                       and ps.expires_at > now()
+                       and storage.objects.name like ps.slug || '/%'
+                )
+            );
     end if;
+
     if not exists (
         select 1 from pg_policies
          where schemaname = 'storage' and tablename = 'objects'
-           and policyname = 'atlases anon update'
+           and policyname = 'atlases publish-token update'
     ) then
-        create policy "atlases anon update" on storage.objects
+        create policy "atlases publish-token update" on storage.objects
             for update to anon, authenticated
-            using (bucket_id = 'atlases')
-            with check (bucket_id = 'atlases');
-    end if;
-    if not exists (
-        select 1 from pg_policies
-         where schemaname = 'storage' and tablename = 'objects'
-           and policyname = 'atlases anon delete'
-    ) then
-        create policy "atlases anon delete" on storage.objects
-            for delete to anon, authenticated
-            using (bucket_id = 'atlases');
+            using (
+                bucket_id = 'atlases'
+                and exists (
+                    select 1 from public.publish_sessions ps
+                     where ps.token = nullif(current_setting('request.headers', true), '')::jsonb->>'x-publish-token'
+                       and ps.expires_at > now()
+                       and storage.objects.name like ps.slug || '/%'
+                )
+            )
+            with check (
+                bucket_id = 'atlases'
+                and exists (
+                    select 1 from public.publish_sessions ps
+                     where ps.token = nullif(current_setting('request.headers', true), '')::jsonb->>'x-publish-token'
+                       and ps.expires_at > now()
+                       and storage.objects.name like ps.slug || '/%'
+                )
+            );
     end if;
 end
 $$;

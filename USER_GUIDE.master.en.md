@@ -139,10 +139,15 @@ The header's `Publish to share` button:
 
 Pressing `Publish`:
 
-1. All blobs (TIFF / xlsx / txt) upload to Supabase Storage in parallel (concurrency 4)
-2. A progress modal shows live `X / N files (Y MB / Z MB)`
-3. Each file retries up to 3 times with exponential backoff
-4. On success a Share URL modal opens with URL + viewer/admin passwords
+1. **Master password is verified** — the value from the management-page gate is reused if still cached; otherwise a prompt asks for it
+2. Server issues a 1-hour **publish session token**
+3. All blobs (TIFF / xlsx / txt) upload to Supabase Storage in parallel (concurrency 4) — the token is sent as a header and validated by RLS
+4. A progress modal shows live `X / N files (Y MB / Z MB)`
+5. Each file retries up to 3 times with exponential backoff
+6. `upsert_project_doc` is called with the master password to update the DB
+7. On success a Share URL modal opens with URL + viewer/admin passwords
+
+> Without the master password, a third party with only the anon key cannot publish or write to Storage. Authentication is enforced server-side via bcrypt in Supabase.
 
 > Read the next section about re-publish behaviour before re-running on a previously-published slug.
 

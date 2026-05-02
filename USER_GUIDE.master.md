@@ -139,10 +139,15 @@
 
 `Publish` を押すと:
 
-1. 全 blob (TIFF / xlsx / txt) を Supabase Storage に並列 (4 同時) アップロード
-2. 進捗モーダルで `X / N files (Y MB / Z MB)` をライブ表示
-3. 各ファイルは最大 3 回までリトライ (exponential backoff)
-4. 完了後、Share URL モーダルが開く (URL + viewer/admin pw を一覧表示)
+1. **Master password の確認** — 管理画面のゲートで通したパスワードがそのまま使われます (キャッシュなしの場合のみ再入力プロンプト)
+2. サーバから 1 時間有効な **publish session token** を取得
+3. 全 blob (TIFF / xlsx / txt) を Supabase Storage に並列 (4 同時) アップロード — token をヘッダで送り、サーバ側 RLS で検証
+4. 進捗モーダルで `X / N files (Y MB / Z MB)` をライブ表示
+5. 各ファイルは最大 3 回までリトライ (exponential backoff)
+6. `upsert_project_doc` を master pw 付きで呼んで DB を更新
+7. 完了後、Share URL モーダルが開く (URL + viewer/admin pw を一覧表示)
+
+> Master password を知らない第三者は、たとえ Supabase の anon key を取得していても publish も Storage 書き込みもできません。サーバ側 (Supabase) の bcrypt 照合で守られています。
 
 > 再 publish の挙動は次節「9. 再 publish の挙動」を必ずご確認ください。
 

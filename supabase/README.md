@@ -4,6 +4,8 @@
 
 > 必要なものは Supabase の **無料プラン** だけです。クレジットカード登録なしで試せます。
 
+> **現在テスト段階のため、リポジトリを private 化しており GitHub Pages は停止中です。** 動作確認は手元で `python3 -m http.server 8000` 等を起動してアクセスしてください (詳細はリポジトリルートの [`README.md`](../README.md))。 Supabase 側 (DB / Storage / RPC) は無影響なので、ローカル実行からでも全機能を試せます。
+
 ---
 
 ## 0. 事前準備
@@ -161,3 +163,49 @@ Supabase の **Project Settings → API** から:
 
 > このゲートは **shoulder-surf 防止レベル** の補助的なものです。本格的な秘匿は `Publish to share` 経由で Supabase 側 (bcrypt) に置くデータでのみ成立します。
 > SHA-256 fallback ハッシュを別パスワードに変更したい場合は、`index.html` 内の `MASTER_FALLBACK_HASH_HEX` を `printf '%s' '<新パスワード>' | sha256sum` の出力で差し替えてください。
+
+---
+
+## Phase 1: Publish と Storage 書き込みのサーバ側ガード
+
+GitHub Pages 経由でソースが流出しても、**マスターパスワードを知らない第三者は publish できない / Storage に書き込めない** 状態にするための措置です。
+
+### 何が変わるか
+
+| 操作 | 旧挙動 | 新挙動 (Phase 1) |
+| --- | --- | --- |
+| `upsert_project_doc` (Publish RPC) | anon key だけで通った | **master pw 必須** (新しい第 1 引数 `_master_pw`) |
+| Storage `atlases` への INSERT/UPDATE | anon ポリシーで誰でも書けた | **`x-publish-token` ヘッダ必須**。token は `request_publish_session(_master_pw, _slug)` でしか取れない |
+| Storage `atlases` の SELECT (読み取り) | public-read | **変更なし** (UUID パスを知っている人だけが拾える前提) |
+| 共有 URL からの閲覧・ROI 編集 | 普通に動く | **変更なし** |
+
+### 適用手順
+
+1. `supabase/share_locks.sql` を Supabase の SQL Editor で再実行 (冪等)
+   - 追加されるもの: `master_credentials` テーブル / `set_master_password` / `_verify_master_pw` / `publish_sessions` テーブル / `request_publish_session` / 旧 `upsert_project_doc(7-arg)` の drop と新 `(8-arg)` の作成 / Storage 旧 anon write ポリシーの drop と publish-token ポリシーの作成
+2. **マスターパスワードを 1 度だけ設定**:
+   ```sql
+   select public.set_master_password('MSIadomine');
+   ```
+   - 8 文字以上必須
+   - 別の文字列にしたい場合は引数を変えるだけ。後日同じ関数を呼べば bcrypt ハッシュが上書きされる
+3. フロント (`index.html` / `viewer/index.html`) を最新コードにする
+   - 古い JS は `_master_pw` 引数を送らないので **publish が `unauthorized` で失敗** します。SQL とフロントは同時に更新してください
+4. テスト:
+   ```sql
+   select public._verify_master_pw('MSIadomine');  -- → t
+   select public._verify_master_pw('wrongpw');     -- → f
+   ```
+
+### Master pw のキャッシュ動線
+
+- Master が `index.html` を開いてゲートに `MSIadomine` を入力
+- 認証成功時に `sessionStorage.desi:masterPw` に 12 時間キャッシュ
+- ビューアの `Publish to share` で再入力プロンプトなしに `request_publish_session` → upload → `upsert_project_doc` まで通る
+
+### Phase 2 への積み残し
+
+- Storage 読み取りの **signed URL 化** (現状は public-read。 UUID パス推測ができないという前提でガード)
+- `atlases anon delete` ポリシーの締め直し
+- master pw のローテーション運用
+- Sakura VPS / 自前ホスティングへの移行
