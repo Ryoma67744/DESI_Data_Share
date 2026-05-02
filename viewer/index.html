@@ -4013,17 +4013,26 @@ async function openHelpModal(audience, lang) {
         // window, but the modal has its own scroll container (.modal-card
         // overflow-y:auto). Find the matching heading inside the modal and
         // scroll the card to it instead.
+        //
+        // marked URL-encodes non-ASCII characters in href values, so a TOC
+        // link to "#5-プロジェクトを開く削除する" arrives as
+        // "#5-%E3%83%97...". Heading ids are written in raw Unicode, and
+        // CSS selectors don't accept ids that start with a digit, so we
+        // decode the href first and then look up by id property comparison
+        // rather than querySelector.
         const card = openModal._card;
         const helpBody = card.querySelector('.help-body');
         if (helpBody) {
             helpBody.querySelectorAll('a[href^="#"]').forEach(a => {
                 a.addEventListener('click', (ev) => {
-                    const href = a.getAttribute('href') || '';
-                    if (href.length < 2) return;
-                    let target = null;
-                    try { target = helpBody.querySelector(href); } catch (e) {}
+                    const hrefAttr = a.getAttribute('href') || '';
+                    if (hrefAttr.length < 2) return;
+                    let want;
+                    try { want = decodeURIComponent(hrefAttr.slice(1)); }
+                    catch (e) { want = hrefAttr.slice(1); }
+                    let target = Array.from(helpBody.querySelectorAll('[id]'))
+                        .find(el => el.id === want) || null;
                     if (!target) {
-                        const want = href.slice(1);
                         target = Array.from(helpBody.querySelectorAll('h1, h2, h3'))
                             .find(h => slugifyHelp(h.textContent || '') === want) || null;
                     }

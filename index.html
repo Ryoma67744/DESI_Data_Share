@@ -699,16 +699,23 @@ async function openHelpModal(audience, lang) {
                 openHelpModal(next, lang).catch(e => console.error(e));
             });
         });
+        // marked URL-encodes non-ASCII characters in href values, so a TOC
+        // link to "#5-プロジェクトを開く削除する" arrives as "#5-%E3%83%97...".
+        // The heading ids on the page are raw Unicode, and CSS selectors
+        // don't accept ids starting with a digit, so we decode the href and
+        // do an id-property lookup instead of querySelector(href).
         const helpBody = card.querySelector('.help-body');
         if (helpBody) {
             helpBody.querySelectorAll('a[href^="#"]').forEach(a => {
                 a.addEventListener('click', (ev) => {
-                    const href = a.getAttribute('href') || '';
-                    if (href.length < 2) return;
-                    let target = null;
-                    try { target = helpBody.querySelector(href); } catch (e) {}
+                    const hrefAttr = a.getAttribute('href') || '';
+                    if (hrefAttr.length < 2) return;
+                    let want;
+                    try { want = decodeURIComponent(hrefAttr.slice(1)); }
+                    catch (e) { want = hrefAttr.slice(1); }
+                    let target = Array.from(helpBody.querySelectorAll('[id]'))
+                        .find(el => el.id === want) || null;
                     if (!target) {
-                        const want = href.slice(1);
                         target = Array.from(helpBody.querySelectorAll('h1, h2, h3'))
                             .find(h => slugifyHelp(h.textContent || '') === want) || null;
                     }
