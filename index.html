@@ -220,13 +220,23 @@ function isMasterUnlocked() {
     } catch (e) { return false; }
 }
 
-function markMasterUnlocked() {
+function markMasterUnlocked(pw) {
     try {
         sessionStorage.setItem(MASTER_UNLOCK_KEY, JSON.stringify({
             unlockedAt: Date.now(),
             expiresAt: Date.now() + MASTER_UNLOCK_TTL_MS,
         }));
     } catch (e) {}
+    // Phase 1: cache the master pw so Publish can mint a publish-session
+    // token without re-prompting. Same TTL as the unlock flag.
+    if (pw) {
+        try {
+            sessionStorage.setItem('desi:masterPw', JSON.stringify({
+                pw,
+                expiresAt: Date.now() + MASTER_UNLOCK_TTL_MS,
+            }));
+        } catch (e) {}
+    }
 }
 
 async function tryServerUnlock(pw) {
@@ -301,7 +311,7 @@ function openMasterUnlockModal() {
             }
             submit.disabled = false; submit.textContent = 'Unlock';
             if (ok) {
-                markMasterUnlocked();
+                markMasterUnlocked(pw);
                 back.remove();
                 resolve(true);
             } else {

@@ -3737,6 +3737,32 @@ async function publishProjectToShare() {
     const meta = await openPublishMetaModal(project);
     if (!meta) return;
 
+    // Phase 1: master pw is required to mint a publish session token and
+    // to call upsert_project_doc. Reuse the cached pw from the master
+    // unlock gate when available; otherwise prompt explicitly.
+    let masterPw = (function () {
+        try {
+            const raw = sessionStorage.getItem('desi:masterPw');
+            if (!raw) return '';
+            const p = JSON.parse(raw);
+            return (p && p.expiresAt > Date.now()) ? (p.pw || '') : '';
+        } catch (e) { return ''; }
+    })();
+    if (!masterPw) {
+        masterPw = (prompt('Master password を入力してください', 'MSIadomine') || '').trim();
+        if (!masterPw) return;
+    }
+    let publishToken = null;
+    try {
+        const sess = await SupabaseClient.requestPublishSession(masterPw, meta.slug);
+        publishToken = sess && sess.token;
+    } catch (e) {
+        console.error('request_publish_session failed', e);
+        alert('Master password が違います、または通信エラー: ' + (e.message || e));
+        return;
+    }
+    if (!publishToken) { alert('publish session token を取得できませんでした'); return; }
+
     showToast('Supabase へアップロード中...', 1800);
     try {
         // Collect every upload as a task first, then run them with a small
@@ -3777,7 +3803,7 @@ async function publishProjectToShare() {
             let lastErr = null;
             for (let attempt = 0; attempt < 3; attempt++) {
                 try {
-                    await SupabaseClient.uploadBlob('atlases', path, blob.blob, blob.mime || (task.ent && task.ent.mime));
+                    await SupabaseClient.uploadBlob('atlases', path, blob.blob, blob.mime || (task.ent && task.ent.mime), publishToken);
                     lastErr = null; break;
                 } catch (e) {
                     lastErr = e;
@@ -3810,6 +3836,7 @@ async function publishProjectToShare() {
         });
 
         const args = {
+            _master_pw: masterPw,
             _slug: meta.slug,
             _display_name: project.displayName || meta.slug,
             _meta: { anatomyPalette: project.anatomyPalette || {}, memo: project.memo || {} },
@@ -4759,14 +4786,32 @@ const SupabaseClient = (() => {
         upsertProjectDoc(args) { return rpc('upsert_project_doc', args); },
         // Master multi-project listing -------------------------
         listProjects(ownerPw) { return rpc('list_projects', { _owner_password: ownerPw }); },
+        // Master-side publish session token (Phase 1) ----------
+        requestPublishSession(masterPw, slug) {
+            return rpc('request_publish_session', { _master_pw: masterPw, _slug: slug });
+        },
         // Storage ----------------------------------------------
-        async uploadBlob(bucket, path, blob, contentType) {
-            const c = _client(); if (!c) throw new Error('supabase_not_configured');
-            const { error } = await c.storage.from(bucket).upload(path, blob, {
-                upsert: true,
-                contentType: contentType || blob.type || 'application/octet-stream',
-            });
-            if (error) throw error;
+        // Phase 1: uploads must carry an x-publish-token header obtained
+        // from request_publish_session. supabase-js's storage.upload()
+        // does not expose an extra-headers option, so we POST directly
+        // to the Storage REST API instead.
+        async uploadBlob(bucket, path, blob, contentType, publishToken) {
+            if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('supabase_not_configured');
+            const url = SUPABASE_URL.replace(/\/+$/, '') + '/storage/v1/object/'
+                      + encodeURIComponent(bucket) + '/' + path.split('/').map(encodeURIComponent).join('/');
+            const headers = {
+                'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+                'apikey': SUPABASE_ANON_KEY,
+                'Content-Type': contentType || (blob && blob.type) || 'application/octet-stream',
+                'x-upsert': 'true',
+            };
+            if (publishToken) headers['x-publish-token'] = publishToken;
+            const resp = await fetch(url, { method: 'POST', headers, body: blob });
+            if (!resp.ok) {
+                let body = '';
+                try { body = await resp.text(); } catch (e) {}
+                throw new Error('upload failed: HTTP ' + resp.status + ' ' + body);
+            }
             return path;
         },
         publicUrl(bucket, path) {
