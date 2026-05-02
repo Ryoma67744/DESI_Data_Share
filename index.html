@@ -204,7 +204,7 @@ const MASTER_UNLOCK_TTL_MS = 12 * 60 * 60 * 1000;
 // to Supabase is unreachable. Regenerate with:
 //   printf '%s' '<password>' | sha256sum
 const MASTER_FALLBACK_HASH_HEX =
-    'aa79ac8bd07f3258d74a7bad8e63b24d7a73792ab3424c3f8af91287dbb019c3';
+    'd453b548866689313ef7ee5b37cb869f342e5cd555c704c3298c1534d510cd6a';
 
 async function sha256Hex(s) {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(s)));
