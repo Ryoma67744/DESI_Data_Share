@@ -3884,11 +3884,22 @@ async function openPublishMetaModal(project) {
 // render it with marked, sanitise with DOMPurify and show inside a wide
 // modal. Cached per language after the first successful fetch so the
 // network round-trip happens only once per language.
+// Help modal: 3 audiences (manage / master / viewer) × 2 languages (ja / en).
+// Keyed by `${audience}:${lang}` so the cache and source mapping line up.
+const _helpAudiences = [
+    { key: 'manage', labelJa: '管理画面',         labelEn: 'Project mgmt'    },
+    { key: 'master', labelJa: '共有 (admin)',     labelEn: 'Sharing (admin)' },
+    { key: 'viewer', labelJa: '共有 (受け手)',    labelEn: 'Sharing (viewer)' },
+];
 const _helpGuideSources = {
-    ja: { path: '../USER_GUIDE.md',    label: '日本語', title: 'DESI Data Share — User Guide', openLabel: '新しいタブで開く', closeLabel: 'Close', errTitle: 'Help を取得できませんでした', errBody: (e) => `USER_GUIDE.md の取得に失敗しました (${e}).` },
-    en: { path: '../USER_GUIDE.en.md', label: 'English', title: 'DESI Data Share — User Guide', openLabel: 'Open in new tab', closeLabel: 'Close', errTitle: 'Failed to load help', errBody: (e) => `Could not fetch USER_GUIDE.en.md (${e}).` },
+    'manage:ja': { path: '../USER_GUIDE.manage.md',    title: 'DESI Data Share — プロジェクト管理ガイド', openLabel: '新しいタブで開く', closeLabel: 'Close', errTitle: 'Help を取得できませんでした', errBody: (e) => `USER_GUIDE.manage.md の取得に失敗しました (${e}).` },
+    'manage:en': { path: '../USER_GUIDE.manage.en.md', title: 'DESI Data Share — Project Management Guide', openLabel: 'Open in new tab', closeLabel: 'Close', errTitle: 'Failed to load help', errBody: (e) => `Could not fetch USER_GUIDE.manage.en.md (${e}).` },
+    'master:ja': { path: '../USER_GUIDE.master.md',    title: 'DESI Data Share — 管理者ガイド (データ共有)', openLabel: '新しいタブで開く', closeLabel: 'Close', errTitle: 'Help を取得できませんでした', errBody: (e) => `USER_GUIDE.master.md の取得に失敗しました (${e}).` },
+    'master:en': { path: '../USER_GUIDE.master.en.md', title: 'DESI Data Share — Admin Guide (Data Sharing)', openLabel: 'Open in new tab', closeLabel: 'Close', errTitle: 'Failed to load help', errBody: (e) => `Could not fetch USER_GUIDE.master.en.md (${e}).` },
+    'viewer:ja': { path: '../USER_GUIDE.md',           title: 'DESI Data Share — 閲覧者ガイド', openLabel: '新しいタブで開く', closeLabel: 'Close', errTitle: 'Help を取得できませんでした', errBody: (e) => `USER_GUIDE.md の取得に失敗しました (${e}).` },
+    'viewer:en': { path: '../USER_GUIDE.en.md',        title: "DESI Data Share — Viewer's Guide", openLabel: 'Open in new tab', closeLabel: 'Close', errTitle: 'Failed to load help', errBody: (e) => `Could not fetch USER_GUIDE.en.md (${e}).` },
 };
-const _helpMarkdownCache = { ja: null, en: null };
+const _helpMarkdownCache = {};
 
 function _readHelpLang() {
     try {
@@ -3898,17 +3909,31 @@ function _readHelpLang() {
     return (typeof navigator !== 'undefined' && /^en/i.test(navigator.language || '')) ? 'en' : 'ja';
 }
 
-async function openHelpModal(lang) {
+function _readHelpAudience() {
+    try {
+        const v = localStorage.getItem('desi:helpAudience');
+        if (v === 'manage' || v === 'master' || v === 'viewer') return v;
+    } catch (e) {}
+    // Auto-pick by current viewer mode: share recipients see the recipient
+    // guide first; everyone else gets the master/admin sharing guide.
+    return (window.App && window.App.shareMode) ? 'viewer' : 'master';
+}
+
+async function openHelpModal(audience, lang) {
+    audience = (audience === 'manage' || audience === 'master' || audience === 'viewer')
+        ? audience : _readHelpAudience();
     lang = (lang === 'en' || lang === 'ja') ? lang : _readHelpLang();
+    try { localStorage.setItem('desi:helpAudience', audience); } catch (e) {}
     try { localStorage.setItem('desi:helpLang', lang); } catch (e) {}
-    const cfg = _helpGuideSources[lang];
-    let md = _helpMarkdownCache[lang];
+    const cacheKey = audience + ':' + lang;
+    const cfg = _helpGuideSources[cacheKey];
+    let md = _helpMarkdownCache[cacheKey];
     if (md == null) {
         try {
             const resp = await fetch(cfg.path, { cache: 'no-cache' });
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             md = await resp.text();
-            _helpMarkdownCache[lang] = md;
+            _helpMarkdownCache[cacheKey] = md;
         } catch (e) {
             console.error('Help fetch failed', e);
             const fallbackHtml = `
@@ -3942,12 +3967,20 @@ async function openHelpModal(lang) {
         });
         bodyHtml = tmp.innerHTML;
     } catch (e) { console.warn('help: heading id injection failed', e); }
-    const tabBtn = (key, active) =>
-        `<button type="button" data-help-lang="${key}" style="padding:3px 10px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;cursor:pointer;background:${active ? '#2563eb' : '#fff'};color:${active ? '#fff' : '#1e293b'};">${_helpGuideSources[key].label}</button>`;
+    const audTab = (a, active) => {
+        const label = lang === 'en' ? a.labelEn : a.labelJa;
+        return `<button type="button" data-help-audience="${a.key}" style="padding:3px 10px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;cursor:pointer;background:${active ? '#0f172a' : '#fff'};color:${active ? '#fff' : '#1e293b'};">${label}</button>`;
+    };
+    const langBtn = (key, active, label) =>
+        `<button type="button" data-help-lang="${key}" style="padding:3px 10px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;cursor:pointer;background:${active ? '#2563eb' : '#fff'};color:${active ? '#fff' : '#1e293b'};">${label}</button>`;
     const html = `
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
           <h2 style="margin:0;">${cfg.title}</h2>
-          <div style="display:flex;gap:4px;">${tabBtn('ja', lang === 'ja')}${tabBtn('en', lang === 'en')}</div>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <div style="display:flex;gap:4px;">${_helpAudiences.map(a => audTab(a, audience === a.key)).join('')}</div>
+            <div style="width:1px;height:18px;background:#cbd5e1;margin:0 4px;"></div>
+            <div style="display:flex;gap:4px;">${langBtn('ja', lang === 'ja', '日本語')}${langBtn('en', lang === 'en', 'English')}</div>
+          </div>
         </div>
         <div class="help-body">${bodyHtml}</div>
         <div class="modal-actions" style="position:sticky;bottom:0;background:#fff;padding-top:8px;">
@@ -3962,7 +3995,15 @@ async function openHelpModal(lang) {
                 const next = btn.getAttribute('data-help-lang');
                 if (next === lang) return;
                 if (openModal._card && openModal._card._close) openModal._card._close(null);
-                openHelpModal(next).catch(e => console.error(e));
+                openHelpModal(audience, next).catch(e => console.error(e));
+            });
+        });
+        openModal._card.querySelectorAll('[data-help-audience]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const next = btn.getAttribute('data-help-audience');
+                if (next === audience) return;
+                if (openModal._card && openModal._card._close) openModal._card._close(null);
+                openHelpModal(next, lang).catch(e => console.error(e));
             });
         });
         // Intercept TOC clicks: native anchor navigation would scroll the
@@ -3979,7 +4020,6 @@ async function openHelpModal(lang) {
                     let target = null;
                     try { target = helpBody.querySelector(href); } catch (e) {}
                     if (!target) {
-                        // Fallback: match by id with slugified text on each heading.
                         const want = href.slice(1);
                         target = Array.from(helpBody.querySelectorAll('h1, h2, h3'))
                             .find(h => slugifyHelp(h.textContent || '') === want) || null;
@@ -4945,10 +4985,13 @@ const App = {
         }
         if (!opened) this.renderEmpty();
         this.wireUi();
-        // ?openHelp=1 (sent from the manager page's Help button) opens the
-        // help modal directly after init.
+        // ?openHelp=<audience> (sent from the manager page's Help button or
+        // a direct link) opens the help modal directly after init. Accepts
+        // 'manage' / 'master' / 'viewer' or '1' (auto-pick).
         if (params.has('openHelp')) {
-            try { openHelpModal().catch(() => {}); } catch (e) {}
+            const aud = params.get('openHelp');
+            const want = (aud === 'manage' || aud === 'master' || aud === 'viewer') ? aud : undefined;
+            try { openHelpModal(want).catch(() => {}); } catch (e) {}
         }
         // No local project at all? Send the user to the management page to
         // pick or create one.
