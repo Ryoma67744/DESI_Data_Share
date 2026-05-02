@@ -1,1 +1,478 @@
-<!DOCTYPE html><meta http-equiv="refresh" content="0;url=viewer/index.html">
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DESI Data Share — Projects</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+  // Keep these in sync with viewer/index.html. Both pages connect to the
+  // same Supabase project so the same anon key is used here.
+  window.SUPABASE_URL      = "https://pxlrlhtcvwkqnlryencs.supabase.co";
+  window.SUPABASE_ANON_KEY = "sb_publishable_2K4sqMmKk3g20Jmwho-awQ_Uu_hSKeU";
+</script>
+<style>
+  body { background:#f8fafc; color:#0f172a; }
+  .card { background:#fff; border:1px solid #e5e7eb; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.04); }
+  .btn { font-size:12px; padding:6px 12px; border:1px solid #cbd5e1; background:#fff; border-radius:4px; cursor:pointer; color:#1e293b; }
+  .btn:hover { background:#eef2ff; color:#1d4ed8; }
+  .btn:disabled { opacity:0.5; cursor:not-allowed; }
+  .btn.primary { background:#2563eb; border-color:#2563eb; color:#fff; }
+  .btn.primary:hover { background:#1d4ed8; }
+  .btn.danger { background:#fff; border-color:#fca5a5; color:#b91c1c; }
+  .btn.danger:hover { background:#fee2e2; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:9999px; font-size:10px; font-weight:600; }
+  .badge.local { background:#dbeafe; color:#1d4ed8; }
+  .badge.both  { background:#dcfce7; color:#166534; }
+  .badge.server{ background:#fef3c7; color:#92400e; }
+  .row label { display:block; font-size:11px; color:#475569; margin-top:8px; }
+  .row input, .row select, .row textarea {
+      width:100%; padding:5px 7px; border:1px solid #cbd5e1; border-radius:4px;
+      font-size:13px; margin-top:2px; background:#fff;
+  }
+  .row textarea { font-family:ui-monospace, SFMono-Regular, monospace; min-height:90px; }
+  .modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:60; display:flex; align-items:center; justify-content:center; }
+  .modal-card { background:#fff; border-radius:8px; box-shadow:0 12px 30px rgba(0,0,0,0.2); padding:18px 22px; width:520px; max-width:94vw; max-height:90vh; overflow-y:auto; }
+  .modal-card h2 { font-size:14px; font-weight:600; margin-bottom:8px; }
+  .modal-card .actions { display:flex; gap:6px; justify-content:flex-end; margin-top:14px; }
+  .modal-card .err { color:#b91c1c; font-size:11px; min-height:1em; margin-top:6px; }
+</style>
+</head>
+<body class="min-h-screen">
+<div id="app" class="max-w-5xl mx-auto px-6 py-8">
+  <header class="flex items-center justify-between gap-4 mb-6">
+    <div>
+      <h1 class="text-xl font-bold">DESI Data Share</h1>
+      <p class="text-xs text-gray-500 mt-1">プロジェクト管理</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <button id="btn-help" class="btn">Help</button>
+    </div>
+  </header>
+
+  <div class="card p-4 mb-4">
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <div class="flex gap-2">
+        <button id="btn-new" class="btn primary">+ 新規プロジェクト</button>
+        <button id="btn-refresh-server" class="btn">サーバから一覧取得</button>
+      </div>
+      <div class="text-xs text-gray-500">ローカル (このブラウザ) と、サーバ (Supabase) の両方から一覧表示します</div>
+    </div>
+  </div>
+
+  <div id="list" class="space-y-2">
+    <p class="text-sm text-gray-500 px-1">読み込み中…</p>
+  </div>
+</div>
+
+<div id="modal-host"></div>
+
+<script>
+'use strict';
+
+// ===========================================================================
+// IndexedDB helpers — minimal subset of viewer/index.html's ProjectStorage.
+// We only need to list / read / delete project rows (no blobs) here.
+// ===========================================================================
+const ProjectStorage = (() => {
+    const DB_NAME = 'desi-projects';
+    const DB_VERSION = 2;
+    let dbPromise = null;
+    function open() {
+        if (dbPromise) return dbPromise;
+        dbPromise = new Promise((resolve, reject) => {
+            const req = indexedDB.open(DB_NAME, DB_VERSION);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('projects')) db.createObjectStore('projects', { keyPath: 'id' });
+                if (!db.objectStoreNames.contains('blobs'))    db.createObjectStore('blobs',    { keyPath: 'id' });
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+        return dbPromise;
+    }
+    async function listProjects() {
+        const db = await open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('projects', 'readonly');
+            const st = tx.objectStore('projects');
+            const out = [];
+            st.openCursor().onsuccess = (e) => {
+                const c = e.target.result;
+                if (c) { out.push(c.value); c.continue(); }
+                else resolve(out);
+            };
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+    async function getProject(id) {
+        const db = await open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('projects', 'readonly');
+            const req = tx.objectStore('projects').get(id);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    }
+    async function putProject(project) {
+        const db = await open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('projects', 'readwrite');
+            tx.objectStore('projects').put(project);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+    async function deleteProject(id) {
+        const db = await open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('projects', 'readwrite');
+            tx.objectStore('projects').delete(id);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+    return { open, listProjects, getProject, putProject, deleteProject };
+})();
+
+// ===========================================================================
+// Minimal Supabase client — only the RPCs we need on this page.
+// ===========================================================================
+const SupabaseClient = (() => {
+    let client = null;
+    function _client() {
+        if (client) return client;
+        if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) return null;
+        if (typeof supabase === 'undefined' || !supabase.createClient) return null;
+        client = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, { auth: { persistSession: false } });
+        return client;
+    }
+    async function rpc(name, args) {
+        const c = _client();
+        if (!c) throw new Error('supabase_not_configured');
+        const { data, error } = await c.rpc(name, args || {});
+        if (error) throw error;
+        return data;
+    }
+    return {
+        configured() { return !!_client(); },
+        listProjects(ownerPw) { return rpc('list_projects', { _owner_password: ownerPw }); },
+    };
+})();
+
+// ===========================================================================
+// Owner password caching (sessionStorage, 12 h)
+// ===========================================================================
+const OWNER_PW_KEY = 'desi:ownerPw';
+function readCachedOwnerPw() {
+    try {
+        const raw = sessionStorage.getItem(OWNER_PW_KEY);
+        if (!raw) return '';
+        const p = JSON.parse(raw);
+        if (p && p.expiresAt && Date.now() < p.expiresAt) return p.pw || '';
+    } catch (e) {}
+    return '';
+}
+function saveCachedOwnerPw(pw) {
+    try { sessionStorage.setItem(OWNER_PW_KEY, JSON.stringify({ pw, expiresAt: Date.now() + 12*60*60*1000 })); } catch (e) {}
+}
+
+// ===========================================================================
+// Modal helpers (similar to viewer/index.html's openModal but self-contained)
+// ===========================================================================
+function openModal(html) {
+    return new Promise((resolve) => {
+        const host = document.getElementById('modal-host');
+        const back = document.createElement('div');
+        back.className = 'modal-backdrop';
+        const card = document.createElement('div');
+        card.className = 'modal-card';
+        card.innerHTML = html;
+        back.appendChild(card);
+        host.appendChild(back);
+        const close = (val) => { back.remove(); resolve(val); };
+        card.querySelectorAll('[data-modal-cancel]').forEach(b => b.addEventListener('click', () => close(null)));
+        back.addEventListener('click', (e) => { if (e.target === back) close(null); });
+        card._close = close; card._back = back;
+        const submit = card.querySelector('[data-modal-ok]');
+        if (submit) submit.addEventListener('click', () => {
+            const result = card._collect ? card._collect() : true;
+            if (result === false || result == null) return;
+            close(result);
+        });
+        const form = card.querySelector('form');
+        if (form) form.addEventListener('submit', (e) => { e.preventDefault(); if (submit) submit.click(); });
+        const focusEl = card.querySelector('input, select, textarea');
+        if (focusEl) setTimeout(() => focusEl.focus(), 30);
+        openModal._card = card;
+    });
+}
+
+// New project form (mirrors viewer/index.html's openNewProjectFormModal)
+async function openNewProjectFormModal() {
+    const safe = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const html = `
+        <h2>新規プロジェクト</h2>
+        <form class="row">
+          <label>プロジェクト名
+            <input type="text" name="name" required>
+          </label>
+          <label>実験日時
+            <input type="date" name="experiment_date">
+          </label>
+          <label>装置
+            <select name="machine">
+              <option value="DESI">DESI</option>
+              <option value="TIMS">TIMS</option>
+              <option value="LTQ">LTQ</option>
+              <option value="Other">Other</option>
+            </select>
+          </label>
+          <label data-matrix-row>Matrix
+            <input type="text" name="matrix">
+          </label>
+          <label>Google Keep
+            <input type="text" name="google_keep" placeholder="https://keep.google.com/...">
+          </label>
+          <label>Memo
+            <textarea name="free_note" rows="3" placeholder="自由記述"></textarea>
+          </label>
+          <p class="err" data-err></p>
+          <div class="actions">
+            <button type="button" class="btn" data-modal-cancel>Cancel</button>
+            <button type="submit" class="btn primary" data-modal-ok>Create</button>
+          </div>
+        </form>`;
+    const p = openModal(html);
+    const card = openModal._card;
+    const machineSel = card.querySelector('[name="machine"]');
+    const matrixRow = card.querySelector('[data-matrix-row]');
+    const refresh = () => { matrixRow.style.display = (machineSel.value && machineSel.value !== 'DESI') ? '' : 'none'; };
+    machineSel.addEventListener('change', refresh);
+    refresh();
+    card._collect = () => {
+        const name = (card.querySelector('[name="name"]').value || '').trim();
+        if (!name) { card.querySelector('[data-err]').textContent = 'プロジェクト名は必須'; return null; }
+        return {
+            name,
+            experimentDate: card.querySelector('[name="experiment_date"]').value || '',
+            machine: machineSel.value || 'DESI',
+            matrix: (card.querySelector('[name="matrix"]').value || '').trim(),
+            googleKeep: (card.querySelector('[name="google_keep"]').value || '').trim(),
+            freeNote: (card.querySelector('[name="free_note"]').value || '').trim(),
+        };
+    };
+    return p;
+}
+
+// ===========================================================================
+// Page logic
+// ===========================================================================
+const safe = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
+let serverRowsCache = null;
+
+function uid(prefix) { return prefix + '_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
+
+function ensureMemoShape(m) {
+    m = m || {};
+    return {
+        sample: m.sample || '',
+        experimentDate: m.experimentDate || '',
+        machine: m.machine || 'DESI',
+        googleKeep: m.googleKeep || '',
+        freeNote: m.freeNote || '',
+        matrix: m.matrix || '',
+        derivatization: m.derivatization || '',
+    };
+}
+
+async function fetchServerProjectList(forcePrompt) {
+    if (!SupabaseClient.configured()) return null;
+    let pw = forcePrompt ? '' : readCachedOwnerPw();
+    if (!pw) {
+        pw = (prompt('サーバから一覧取得: admin password を入力してください', 'MSIadomine') || '').trim();
+        if (!pw) return null;
+    }
+    try {
+        const rows = await SupabaseClient.listProjects(pw);
+        saveCachedOwnerPw(pw);
+        return Array.isArray(rows) ? rows : [];
+    } catch (e) {
+        console.warn('list_projects failed', e);
+        alert('サーバ一覧の取得に失敗しました (パスワード違い?)');
+        return null;
+    }
+}
+
+async function buildRows() {
+    const local = await ProjectStorage.listProjects();
+    const localBySlug = new Map();
+    const localOnly = [];
+    for (const lp of local) {
+        const slug = lp.shareInfo && lp.shareInfo.slug;
+        if (slug) localBySlug.set(slug, lp);
+        else localOnly.push(lp);
+    }
+    const rows = [];
+    for (const lp of localOnly) rows.push({ kind: 'local-only', local: lp });
+    for (const lp of localBySlug.values()) rows.push({ kind: 'local+server-maybe', local: lp });
+    if (Array.isArray(serverRowsCache)) {
+        for (const sp of serverRowsCache) {
+            if (localBySlug.has(sp.slug)) {
+                const r = rows.find(x => x.local && x.local.shareInfo && x.local.shareInfo.slug === sp.slug);
+                if (r) { r.kind = 'local+server'; r.server = sp; }
+            } else {
+                rows.push({ kind: 'server-only', server: sp });
+            }
+        }
+    }
+    rows.sort((a, b) => {
+        const ta = (a.local && a.local.createdAt) || (a.server && (a.server.updated_at || a.server.created_at)) || '';
+        const tb = (b.local && b.local.createdAt) || (b.server && (b.server.updated_at || b.server.created_at)) || '';
+        return tb.localeCompare(ta);
+    });
+    return rows;
+}
+
+function rowHtml(r) {
+    const memo = (r.local && r.local.memo) || (r.server && r.server.meta && r.server.meta.memo) || {};
+    const name = (r.local && r.local.displayName) || (r.server && r.server.display_name) || (r.server && r.server.slug) || '(no name)';
+    const slug = (r.local && r.local.shareInfo && r.local.shareInfo.slug) || (r.server && r.server.slug) || '';
+    const date = memo.experimentDate || '—';
+    const machine = memo.machine || '—';
+    const matrix = (machine !== 'DESI' && memo.matrix) ? memo.matrix : '';
+    const note = (memo.freeNote || '').slice(0, 120);
+    const gk = memo.googleKeep || '';
+    const url = (r.local && r.local.shareInfo && r.local.shareInfo.url) || '';
+    const badge = r.kind === 'server-only'
+        ? '<span class="badge server">Server only</span>'
+        : (r.kind === 'local+server' ? '<span class="badge both">Local + Server</span>' : '<span class="badge local">Local</span>');
+    const localId = r.local ? r.local.id : '';
+    return `
+        <div class="card p-3 proj-row" data-local-id="${safe(localId)}" data-slug="${safe(slug)}" data-url="${safe(url)}">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex items-center gap-2 min-w-0">
+              <div class="font-semibold truncate">${safe(name)}</div>
+              ${badge}
+            </div>
+            <div class="flex gap-2">
+              ${r.local
+                  ? '<button type="button" class="btn primary" data-action="open-local">Open</button>'
+                  : '<button type="button" class="btn primary" data-action="open-server">Open</button>'}
+              ${url ? '<button type="button" class="btn" data-action="copy-url">Copy URL</button>' : (r.local ? '<button type="button" class="btn" disabled title="Publish to share してから URL を取得してください">URL なし</button>' : '')}
+              ${r.local ? '<button type="button" class="btn danger" data-action="delete-local">Delete</button>' : ''}
+            </div>
+          </div>
+          <div class="text-xs text-gray-600 mt-2">
+            実験日: ${safe(date)} ・ 装置: ${safe(machine)}${matrix ? ' / Matrix: ' + safe(matrix) : ''}
+            ${gk ? ' ・ <a class="text-blue-600 hover:underline" href="' + safe(gk) + '" target="_blank" rel="noopener">Google Keep ↗</a>' : ''}
+          </div>
+          ${note ? '<div class="text-xs text-gray-500 mt-1 whitespace-pre-line">' + safe(note) + '</div>' : ''}
+        </div>`;
+}
+
+async function renderList() {
+    const list = document.getElementById('list');
+    const rows = await buildRows();
+    if (!rows.length) {
+        list.innerHTML = `
+            <div class="card p-6 text-center text-sm text-gray-500">
+              プロジェクトがまだありません。<br>「+ 新規プロジェクト」で作成するか、「サーバから一覧取得」で過去のプロジェクトを呼び出してください。
+            </div>`;
+        return;
+    }
+    list.innerHTML = rows.map(rowHtml).join('');
+    list.querySelectorAll('.proj-row').forEach(row => {
+        const localId = row.getAttribute('data-local-id');
+        const slug = row.getAttribute('data-slug');
+        const url = row.getAttribute('data-url');
+        const click = (action, fn) => {
+            const btn = row.querySelector(`[data-action="${action}"]`);
+            if (btn) btn.addEventListener('click', fn);
+        };
+        click('open-local', () => {
+            if (!localId) return;
+            location.href = 'viewer/index.html?project=' + encodeURIComponent(localId);
+        });
+        click('open-server', () => {
+            if (!slug) return;
+            location.href = 'viewer/index.html#share=' + encodeURIComponent(slug);
+        });
+        click('copy-url', async () => {
+            if (!url) return;
+            try { await navigator.clipboard.writeText(url); }
+            catch (e) {
+                const ta = document.createElement('textarea');
+                ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+            }
+            const btn = row.querySelector('[data-action="copy-url"]');
+            if (btn) { const o = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => { btn.textContent = o; }, 1200); }
+        });
+        click('delete-local', async () => {
+            if (!localId) return;
+            if (!confirm('ローカルからこのプロジェクトを削除しますか? (サーバに publish 済みなら、サーバ側のデータは残ります)')) return;
+            await ProjectStorage.deleteProject(localId);
+            await renderList();
+        });
+    });
+}
+
+async function init() {
+    document.getElementById('btn-new').addEventListener('click', async () => {
+        const data = await openNewProjectFormModal();
+        if (!data) return;
+        const project = {
+            id: uid('proj'),
+            displayName: data.name,
+            anatomyPalette: {},
+            sections: [],
+            rois: [],
+            roiHidden: {},
+            memo: ensureMemoShape({
+                experimentDate: data.experimentDate,
+                machine: data.machine,
+                matrix: data.matrix,
+                googleKeep: data.googleKeep,
+                freeNote: data.freeNote,
+            }),
+            createdAt: new Date().toISOString(),
+        };
+        await ProjectStorage.putProject(project);
+        // Jump straight into the viewer with the newly-created project.
+        location.href = 'viewer/index.html?project=' + encodeURIComponent(project.id);
+    });
+    document.getElementById('btn-refresh-server').addEventListener('click', async () => {
+        const rows = await fetchServerProjectList(true);
+        if (rows) {
+            serverRowsCache = rows;
+            await renderList();
+        }
+    });
+    document.getElementById('btn-help').addEventListener('click', () => {
+        // Help is rendered inside the viewer so we just send the user there
+        // and let the viewer's modal open afterwards. Dropping ?openHelp on
+        // the URL is the simplest signal.
+        location.href = 'viewer/index.html?openHelp=1';
+    });
+
+    await renderList();
+    // Try a silent server pull if we have a cached owner pw.
+    const cachedPw = readCachedOwnerPw();
+    if (cachedPw && SupabaseClient.configured()) {
+        try {
+            const rows = await SupabaseClient.listProjects(cachedPw);
+            if (Array.isArray(rows)) {
+                serverRowsCache = rows;
+                await renderList();
+            }
+        } catch (e) { /* expired or wrong: silently ignore, user can hit refresh */ }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => { init().catch(e => { console.error(e); alert('init failed: ' + (e.message || e)); }); });
+</script>
+</body>
+</html>

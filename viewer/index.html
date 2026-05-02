@@ -239,7 +239,7 @@ body.share-mode .thumb-file-group .file-actions [data-action="delete-file"] { di
                 <button data-mode="free" class="px-2 py-1 bg-white text-gray-700">Free</button>
                 <button data-mode="compound" class="px-2 py-1 bg-blue-600 text-white">Compound</button>
             </div>
-            <button id="btn-projects" class="btn" title="Manage local + server-side projects">Projects</button>
+            <button id="btn-projects" class="btn" title="Back to project management">← Projects</button>
             <button id="btn-new-project" class="btn">New</button>
             <button id="btn-import-zip" class="btn">Import ZIP</button>
             <button id="btn-export-zip" class="btn">Export ZIP</button>
@@ -3666,6 +3666,61 @@ async function tryAppendUserRoiColumns(srcBlob, section, msiEnt, project) {
 //   4. Call upsert_project_doc which (re)creates rows in projects /
 //      sections / rois with the supplied passwords.
 //   5. Show the resulting `<host>#share=<slug>` URL in a copyable form.
+// Run worker(item) over `items` with at most `limit` in flight. Errors
+// propagate (the first failed worker will reject the returned promise).
+async function runWithConcurrency(items, limit, worker) {
+    const queue = items.slice();
+    let aborted = null;
+    const workers = Array.from({ length: Math.max(1, limit) }, async () => {
+        while (queue.length && !aborted) {
+            const item = queue.shift();
+            if (item === undefined) break;
+            try { await worker(item); }
+            catch (e) { aborted = e; throw e; }
+        }
+    });
+    await Promise.all(workers);
+}
+
+// Modal showing publish-time upload progress. Returns { update, close }
+// the caller drives. Stays sticky on top until close() is invoked.
+function openPublishProgressModal(totalCount) {
+    const html = `
+        <h2>Supabase へアップロード中…</h2>
+        <p style="font-size:12px;color:#475569;">大きなプロジェクトでは数分かかることがあります。タブは閉じないでください。</p>
+        <div style="margin-top:8px;">
+          <div data-pct style="font-size:13px;font-weight:600;color:#0f172a;">0%</div>
+          <div data-stats style="font-size:11px;color:#64748b;margin-top:2px;">0 / ${totalCount} files</div>
+          <div style="margin-top:6px;height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+            <div data-bar style="height:100%;width:0%;background:#2563eb;transition:width 0.2s;"></div>
+          </div>
+        </div>`;
+    const p = openModal(html);
+    const card = openModal._card;
+    const bar = card && card.querySelector('[data-bar]');
+    const pctEl = card && card.querySelector('[data-pct]');
+    const statsEl = card && card.querySelector('[data-stats]');
+    // Suppress backdrop click / cancel button while uploading.
+    if (card && card._back) card._back.addEventListener('click', (ev) => { ev.stopPropagation(); });
+    const fmtMB = (b) => (b / (1024 * 1024)).toFixed(1) + ' MB';
+    return {
+        update(done, total, doneBytes, totalBytes) {
+            const pct = total ? Math.round((done / total) * 100) : 0;
+            if (pctEl) pctEl.textContent = pct + '%';
+            if (bar) bar.style.width = pct + '%';
+            if (statsEl) {
+                let s = `${done} / ${total} files`;
+                if (typeof doneBytes === 'number' && totalBytes > 0) {
+                    s += ` ・ ${fmtMB(doneBytes)} / ${fmtMB(totalBytes)}`;
+                }
+                statsEl.textContent = s;
+            }
+        },
+        close() { if (card && card._close) card._close(null); },
+        promise: p,
+    };
+}
+
 async function publishProjectToShare() {
     const project = App.project;
     if (!project) { showToast('プロジェクトを開いてから実行してください'); return; }
@@ -3678,29 +3733,20 @@ async function publishProjectToShare() {
 
     showToast('Supabase へアップロード中...', 1800);
     try {
-        // Upload every blob to Storage under a per-project prefix. Build a
-        // section-by-section map of the resulting paths so the publish RPC
-        // can persist them alongside the section meta.
+        // Collect every upload as a task first, then run them with a small
+        // concurrency cap so the bulk transfer doesn't sit on a single
+        // serial connection. Track byte totals so the progress modal can
+        // show "X / N files (Y MB)" while in flight.
+        const uploadTasks = [];
         const sectionsPayload = [];
         for (const sec of project.sections) {
             const storage = { images: {}, msiSeries: {} };
-            const upload = async (blobId, kindFolder, key, ent) => {
-                if (!blobId) return null;
-                const blob = await ProjectStorage.getBlob(blobId);
-                if (!blob || !blob.blob) return null;
-                const filename = (ent && ent.filename) || (blob.filename) || (key + '.bin');
-                const path = `${meta.slug}/${sec.id}/${kindFolder}/${blobId}__${filename}`;
-                await SupabaseClient.uploadBlob('atlases', path, blob.blob, blob.mime || (ent && ent.mime));
-                return { path, mime: blob.mime || (ent && ent.mime), filename };
+            const queue = (kindFolder, slot, k, ent) => {
+                if (!ent || !ent.blobId) return;
+                uploadTasks.push({ blobId: ent.blobId, kindFolder, slot, key: k, ent, sectionId: sec.id, storage });
             };
-            for (const [k, ent] of Object.entries(sec.images || {})) {
-                const ref = await upload(ent.blobId, 'images', k, ent);
-                if (ref) storage.images[k] = ref;
-            }
-            for (const [k, ent] of Object.entries(sec.msiSeries || {})) {
-                const ref = await upload(ent.blobId, 'msi', k, ent);
-                if (ref) storage.msiSeries[k] = Object.assign({}, ent, ref);
-            }
+            for (const [k, ent] of Object.entries(sec.images || {})) queue('images', 'images', k, ent);
+            for (const [k, ent] of Object.entries(sec.msiSeries || {})) queue('msi', 'msiSeries', k, ent);
             sectionsPayload.push({
                 id: sec.id,
                 ordinal: sec.ordinal || 0,
@@ -3708,6 +3754,41 @@ async function publishProjectToShare() {
                 meta: sec.meta || {},
                 storagePaths: storage,
             });
+        }
+
+        const progress = openPublishProgressModal(uploadTasks.length);
+        let doneCount = 0;
+        let doneBytes = 0;
+        let totalBytes = 0;
+        const uploadOne = async (task) => {
+            const blob = await ProjectStorage.getBlob(task.blobId);
+            if (!blob || !blob.blob) return;
+            const filename = (task.ent && task.ent.filename) || blob.filename || (task.key + '.bin');
+            const path = `${meta.slug}/${task.sectionId}/${task.kindFolder}/${task.blobId}__${filename}`;
+            const size = (blob.blob && blob.blob.size) || 0;
+            totalBytes += size;
+            // Two retries with exponential backoff for transient network errors.
+            let lastErr = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    await SupabaseClient.uploadBlob('atlases', path, blob.blob, blob.mime || (task.ent && task.ent.mime));
+                    lastErr = null; break;
+                } catch (e) {
+                    lastErr = e;
+                    if (attempt < 2) await new Promise(r => setTimeout(r, 800 * Math.pow(2, attempt)));
+                }
+            }
+            if (lastErr) throw lastErr;
+            const ref = { path, mime: blob.mime || (task.ent && task.ent.mime), filename };
+            if (task.slot === 'msiSeries') task.storage[task.slot][task.key] = Object.assign({}, task.ent, ref);
+            else task.storage[task.slot][task.key] = ref;
+            doneCount++; doneBytes += size;
+            progress.update(doneCount, uploadTasks.length, doneBytes, totalBytes);
+        };
+        try {
+            await runWithConcurrency(uploadTasks, 4, uploadOne);
+        } finally {
+            progress.close();
         }
 
         const roisPayload = (project.rois || []).flatMap(r => {
@@ -4825,23 +4906,39 @@ const App = {
         }
 
         await this.refreshProjectPicker();
+        // The new root /index.html drives project selection. Look for
+        // ?project=<id> first (came from a row click), then fall back to
+        // the previously-opened project. If nothing matches, redirect the
+        // user to the project management page rather than showing an empty
+        // viewer.
+        const params = new URLSearchParams(location.search || '');
+        const requestedId = params.get('project') || '';
         const last = localStorage.getItem('desi:lastProjectId');
         let opened = false;
-        if (last) {
-            try { await this.openProject(last); opened = !!this.project; }
-            catch (e) { console.warn('Failed to open last project:', e); this.renderEmpty(); }
-        } else {
-            this.renderEmpty();
+        if (requestedId) {
+            try { await this.openProject(requestedId); opened = !!this.project; }
+            catch (e) { console.warn('Failed to open requested project:', e); }
         }
+        if (!opened && last) {
+            try { await this.openProject(last); opened = !!this.project; }
+            catch (e) { console.warn('Failed to open last project:', e); }
+        }
+        if (!opened) this.renderEmpty();
         this.wireUi();
-        // First-run helper: when no local project exists yet, drop the user
-        // straight onto the project management screen instead of the empty
-        // welcome panel. They can pick "+ 新規" from there or pull a list
-        // from the server.
+        // ?openHelp=1 (sent from the manager page's Help button) opens the
+        // help modal directly after init.
+        if (params.has('openHelp')) {
+            try { openHelpModal().catch(() => {}); } catch (e) {}
+        }
+        // No local project at all? Send the user to the management page to
+        // pick or create one.
         if (!opened) {
             try {
                 const all = await ProjectStorage.listProjects();
-                if (!all.length) openProjectsManagerModal().catch(() => {});
+                if (!all.length) {
+                    location.replace('../');
+                    return;
+                }
             } catch (e) {}
         }
     },
@@ -5367,7 +5464,7 @@ const App = {
             if (data) await this.createNewProject(data);
         });
         const projBtn = document.getElementById('btn-projects');
-        if (projBtn) projBtn.addEventListener('click', () => { openProjectsManagerModal().catch(e => console.error(e)); });
+        if (projBtn) projBtn.addEventListener('click', () => { location.href = '../'; });
         document.getElementById('btn-delete-project').addEventListener('click', () => this.deleteCurrentProject());
         document.getElementById('btn-add-section').addEventListener('click', () => this.addSection());
         document.getElementById('btn-export-zip').addEventListener('click', () => exportProjectAsZip());
