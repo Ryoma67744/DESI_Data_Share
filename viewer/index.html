@@ -797,6 +797,26 @@ async function decodeJpegInTiffToDataUrl(buf, ifd) {
     const rowsPerStrip = (ifd.t278 && ifd.t278.length) ? ifd.t278[0] : H;
     const N = stripOffsets.length;
 
+    // Histology scanners commonly emit JPEG-in-TIFF strips WITHOUT an Adobe
+    // APP14 marker. The browser's JPEG decoder then defaults to treating
+    // 3-channel JPEGs as YCbCr and applies a YCbCr→sRGB conversion — but
+    // when TIFF's PhotometricInterpretation says the data is already RGB
+    // (t262=2), that extra conversion produces the classic colour shift
+    // (white → magenta, pink → green). Inject a synthetic APP14 marker
+    // right after SOI so the decoder honours the TIFF's declared colour
+    // space exactly.
+    //   ColorTransform: 0 = unknown / RGB, 1 = YCbCr, 2 = YCCK
+    const photometric = (ifd.t262 && ifd.t262.length) ? ifd.t262[0] : 2;
+    const colorTransform = (photometric === 6) ? 1 : 0;
+    const APP14 = new Uint8Array([
+        0xFF, 0xEE, 0x00, 0x0E,                  // marker + length (14)
+        0x41, 0x64, 0x6F, 0x62, 0x65,            // "Adobe"
+        0x00, 0x64,                              // version 100
+        0x80, 0x00,                              // flags0
+        0x00, 0x00,                              // flags1
+        colorTransform & 0xFF,                   // ColorTransform
+    ]);
+
     // JPEGTables stores shared SOI + (DQT/DHT/...) + EOI markers. Strip out
     // the bracketing SOI/EOI so we can splice the inner markers between each
     // strip's SOI and SOF.
@@ -818,15 +838,15 @@ async function decodeJpegInTiffToDataUrl(buf, ifd) {
         if (!Number.isFinite(off) || !Number.isFinite(len) || off + len > buf.byteLength) return null;
         const strip = new Uint8Array(buf, off, len);
         if (strip.length < 4 || strip[0] !== 0xFF || strip[1] !== 0xD8) return null;
-        let jpeg;
-        if (tablesInner && tablesInner.length) {
-            jpeg = new Uint8Array(2 + tablesInner.length + strip.length - 2);
-            jpeg.set(strip.subarray(0, 2), 0);                   // SOI
-            jpeg.set(tablesInner, 2);                            // DQT/DHT/...
-            jpeg.set(strip.subarray(2), 2 + tablesInner.length); // SOF + SOS + data + EOI
-        } else {
-            jpeg = strip;
-        }
+        // Splice as: SOI + APP14 + (JPEGTables inner) + (SOF + SOS + data + EOI)
+        const inner = tablesInner && tablesInner.length ? tablesInner : null;
+        const innerLen = inner ? inner.length : 0;
+        const jpeg = new Uint8Array(2 + APP14.length + innerLen + strip.length - 2);
+        let p = 0;
+        jpeg.set(strip.subarray(0, 2), p); p += 2;       // SOI
+        jpeg.set(APP14, p); p += APP14.length;           // Adobe APP14
+        if (inner) { jpeg.set(inner, p); p += innerLen; } // DQT/DHT/...
+        jpeg.set(strip.subarray(2), p);                  // rest of strip
         const blob = new Blob([jpeg], { type: 'image/jpeg' });
         let bmp;
         try { bmp = await createImageBitmap(blob); }
