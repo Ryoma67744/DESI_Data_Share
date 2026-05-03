@@ -3480,19 +3480,19 @@ const Wizards = {
 
                 <span>Scale</span>
                 <input type="range" data-scale min="5" max="500" step="0.1" value="${state.scale_pct}">
-                <input type="number" data-scale-num step="0.1" min="0.1" value="${state.scale_pct}" style="width:70px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> %
+                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-scale-num step="0.1" min="0.1" value="${state.scale_pct}" style="width:60px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> %</span>
 
                 <span>Rotate</span>
                 <input type="range" data-rotate min="-180" max="180" step="0.1" value="${state.rotate_deg}">
-                <input type="number" data-rotate-num step="0.1" min="-180" max="180" value="${state.rotate_deg}" style="width:70px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> °
+                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-rotate-num step="0.1" min="-180" max="180" value="${state.rotate_deg}" style="width:60px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> °</span>
 
                 <span>Offset X</span>
                 <input type="range" data-offx min="-2000" max="2000" step="0.5" value="${state.offx}">
-                <input type="number" data-offx-num step="0.5" value="${state.offx}" style="width:70px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> px
+                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-offx-num step="0.5" value="${state.offx}" style="width:54px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> px</span>
 
                 <span>Offset Y</span>
                 <input type="range" data-offy min="-2000" max="2000" step="0.5" value="${state.offy}">
-                <input type="number" data-offy-num step="0.5" value="${state.offy}" style="width:70px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> px
+                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-offy-num step="0.5" value="${state.offy}" style="width:54px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> px</span>
               </div>
             </fieldset>
 
@@ -3505,16 +3505,16 @@ const Wizards = {
                 <span data-pick-status style="color:#64748b;">点: HE 0 / MSI 0</span>
                 <button type="button" class="btn danger" data-clear-lm style="margin-left:auto;">Clear all</button>
               </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;align-items:start;">
                 <div data-thumb-wrap="he" style="position:relative;border:1px solid #cbd5e1;border-radius:4px;overflow:hidden;background:#0f172a;min-height:160px;">
                   <div style="position:absolute;top:2px;left:6px;color:#fff;font-size:10px;background:rgba(0,0,0,0.5);padding:1px 5px;border-radius:3px;z-index:2;pointer-events:none;">HE</div>
                   <img data-he-img style="display:block;width:100%;height:auto;cursor:crosshair;user-select:none;" alt="HE">
-                  <svg data-he-svg style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></svg>
+                  <svg data-he-svg preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></svg>
                 </div>
                 <div data-thumb-wrap="msi" style="position:relative;border:1px solid #cbd5e1;border-radius:4px;overflow:hidden;background:#0f172a;min-height:160px;">
                   <div style="position:absolute;top:2px;left:6px;color:#fff;font-size:10px;background:rgba(0,0,0,0.5);padding:1px 5px;border-radius:3px;z-index:2;pointer-events:none;">MSI</div>
                   <img data-msi-img style="display:block;width:100%;height:auto;cursor:crosshair;user-select:none;" alt="MSI">
-                  <svg data-msi-svg style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></svg>
+                  <svg data-msi-svg preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></svg>
                 </div>
               </div>
               <table data-lm-table style="width:100%;font-size:10px;margin-top:6px;border-collapse:collapse;"></table>
@@ -3688,13 +3688,13 @@ const Wizards = {
             return [x, y];
         };
 
-        heWrap.addEventListener('click', (ev) => {
+        heImg.addEventListener('click', (ev) => {
             if (state.pickMode !== 'he') return;
             if (!heImg.naturalWidth) return;
             state.landmarks.he.push(thumbClickToPixel(ev, heImg));
             renderLandmarks();
         });
-        msiWrap.addEventListener('click', (ev) => {
+        msiImg.addEventListener('click', (ev) => {
             if (state.pickMode !== 'msi') return;
             if (!msiImg.naturalWidth) return;
             state.landmarks.msi.push(thumbClickToPixel(ev, msiImg));
