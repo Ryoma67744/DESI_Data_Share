@@ -774,32 +774,60 @@ function labToSrgb(L255, A255, B255) {
     ];
 }
 
-// JPEG-in-TIFF (Compression tag 7): pull the JPEG bitstream straight out of
-// the TIFF strip and let the browser's JPEG decoder render it. UTIF's JPEG
-// path mishandles YCbCr → sRGB conversion when the TIFF claims
-// PhotometricInterpretation=2 (RGB) while the embedded JPEG was actually
-// encoded as YCbCr (which is the JPEG default), producing an image that
-// looks colour-shifted (white → magenta, pink → green).
+// JPEG-in-TIFF (Compression tag 7): for each strip, build a complete JPEG
+// bitstream (merging shared JPEGTables (t347) when present) and let the
+// browser's JPEG decoder render it. UTIF mishandles YCbCr → sRGB when the
+// TIFF claims PhotometricInterpretation=2 (RGB) while the embedded JPEG is
+// actually YCbCr (the JPEG default), producing an image that looks
+// colour-shifted (white → magenta, pink → green). The browser's JPEG path
+// reads the SOF / Adobe APP14 markers correctly.
 async function decodeJpegInTiffToDataUrl(buf, ifd) {
     const stripOffsets    = ifd.t273;
     const stripByteCounts = ifd.t279;
-    if (!stripOffsets || !stripByteCounts || stripOffsets.length !== 1) return null;
-    const start = stripOffsets[0];
-    const len   = stripByteCounts[0];
-    if (!Number.isFinite(start) || !Number.isFinite(len) || start + len > buf.byteLength) return null;
-    const jpeg = new Uint8Array(buf, start, len);
-    if (jpeg.length < 2 || jpeg[0] !== 0xFF || jpeg[1] !== 0xD8) return null;  // not SOI
-    const blob = new Blob([jpeg], { type: 'image/jpeg' });
-    try {
-        const bmp = await createImageBitmap(blob);
-        const c = document.createElement('canvas');
-        c.width = bmp.width; c.height = bmp.height;
-        c.getContext('2d').drawImage(bmp, 0, 0);
-        if (typeof bmp.close === 'function') bmp.close();
-        return c.toDataURL('image/png');
-    } catch (_) {
-        return null;
+    if (!stripOffsets || !stripByteCounts || stripOffsets.length === 0) return null;
+    if (ifd.t324) return null;        // tiled images need a different layout
+    const W = ifd.width, H = ifd.height;
+    const rowsPerStrip = (ifd.t278 && ifd.t278.length) ? ifd.t278[0] : H;
+    const N = stripOffsets.length;
+
+    // JPEGTables stores shared SOI + (DQT/DHT/...) + EOI markers. Strip out
+    // the bracketing SOI/EOI so we can splice the inner markers between each
+    // strip's SOI and SOF.
+    let tablesInner = null;
+    if (ifd.t347 && ifd.t347.length > 4) {
+        const t = ifd.t347;
+        let s = 0, e = t.length;
+        if (t[0] === 0xFF && t[1] === 0xD8) s = 2;
+        if (t[e-2] === 0xFF && t[e-1] === 0xD9) e -= 2;
+        tablesInner = t.subarray(s, e);
     }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+
+    for (let i = 0; i < N; i++) {
+        const off = stripOffsets[i], len = stripByteCounts[i];
+        if (!Number.isFinite(off) || !Number.isFinite(len) || off + len > buf.byteLength) return null;
+        const strip = new Uint8Array(buf, off, len);
+        if (strip.length < 4 || strip[0] !== 0xFF || strip[1] !== 0xD8) return null;
+        let jpeg;
+        if (tablesInner && tablesInner.length) {
+            jpeg = new Uint8Array(2 + tablesInner.length + strip.length - 2);
+            jpeg.set(strip.subarray(0, 2), 0);                   // SOI
+            jpeg.set(tablesInner, 2);                            // DQT/DHT/...
+            jpeg.set(strip.subarray(2), 2 + tablesInner.length); // SOF + SOS + data + EOI
+        } else {
+            jpeg = strip;
+        }
+        const blob = new Blob([jpeg], { type: 'image/jpeg' });
+        let bmp;
+        try { bmp = await createImageBitmap(blob); }
+        catch (_) { return null; }
+        ctx.drawImage(bmp, 0, i * rowsPerStrip);
+        if (typeof bmp.close === 'function') bmp.close();
+    }
+    return canvas.toDataURL('image/png');
 }
 
 async function decodeTiffArrayBufferToDataUrl(buf) {
