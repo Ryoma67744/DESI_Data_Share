@@ -1421,8 +1421,14 @@ class SectionPanel {
             const img = this.imageSources[key];
             const persistedDisp = (this.section.meta && this.section.meta.layerDisplay && this.section.meta.layerDisplay[key]) || null;
             const persistedGray = !!(persistedDisp && persistedDisp.grayscale);
+            // applyOpacity defaults: HE/IF off (always opaque), everything else on.
+            // Persisted boolean wins regardless of layer type.
+            const isHeLikeKey = /HE_STAIN|IF_STAIN/i.test(key);
+            const persistedApply = (persistedDisp && typeof persistedDisp.applyOpacity === 'boolean')
+                ? persistedDisp.applyOpacity
+                : !isHeLikeKey;
             if (!img || !img.complete || img.naturalWidth === 0) {
-                this.imageSettings[key] = { opacity: 1.0, vmin: 0, vmax: 255, actualMin: 0, actualMax: 255, grayscale: persistedGray };
+                this.imageSettings[key] = { opacity: 1.0, vmin: 0, vmax: 255, actualMin: 0, actualMax: 255, grayscale: persistedGray, applyOpacity: persistedApply };
                 continue;
             }
             const c = document.createElement('canvas');
@@ -1452,7 +1458,7 @@ class SectionPanel {
             // lumToRaw(NaN) propagates as '—' and the number input drops it.
             if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn > mx) { mn = 0; mx = 255; }
             if (!Number.isFinite(vmax) || vmax <= mn) vmax = mx;
-            this.imageSettings[key] = { opacity: 1.0, vmin: mn, vmax, actualMin: mn, actualMax: mx, grayscale: persistedGray };
+            this.imageSettings[key] = { opacity: 1.0, vmin: mn, vmax, actualMin: mn, actualMax: mx, grayscale: persistedGray, applyOpacity: persistedApply };
         }
     }
 
@@ -1592,7 +1598,7 @@ class SectionPanel {
                 drawSource = img;
             }
 
-            ctx.globalAlpha = settings.opacity;
+            ctx.globalAlpha = (settings.applyOpacity === false) ? 1.0 : settings.opacity;
             ctx.globalCompositeOperation = isMsiLayer ? 'lighter' : 'source-over';
 
             const ref = this.getMsiRefSize();
@@ -2409,6 +2415,15 @@ class SectionPanel {
         head.textContent = title;
         pop.appendChild(head);
 
+        const applyOnT = settings.applyOpacity !== false;
+        const applyRowT = document.createElement('div');
+        applyRowT.style.cssText = 'margin-bottom:6px;';
+        applyRowT.innerHTML =
+            '<label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;color:#1e293b;">' +
+                '<input type="checkbox" class="apo"' + (applyOnT ? ' checked' : '') + '> Apply opacity (透明化を有効)' +
+            '</label>';
+        pop.appendChild(applyRowT);
+
         const opcRow = document.createElement('div');
         opcRow.style.cssText = 'margin-bottom:6px;';
         opcRow.innerHTML =
@@ -2432,11 +2447,29 @@ class SectionPanel {
 
         const opc = pop.querySelector('.opc');
         const opcVal = pop.querySelector('.opc-val');
+        const apo = pop.querySelector('.apo');
+        const syncOpcEnabledT = () => {
+            const on = apo.checked;
+            opc.disabled = !on;
+            opc.style.opacity = on ? '1' : '0.5';
+        };
+        syncOpcEnabledT();
         opc.addEventListener('input', () => {
             const v = Math.max(0, Math.min(100, parseInt(opc.value) || 0));
             settings.opacity = v / 100;
             opcVal.textContent = v + '%';
             this.renderComposite();
+        });
+        apo.addEventListener('change', () => {
+            settings.applyOpacity = apo.checked;
+            this.section.meta = this.section.meta || {};
+            this.section.meta.layerDisplay = this.section.meta.layerDisplay || {};
+            this.section.meta.layerDisplay[key] = this.section.meta.layerDisplay[key] || {};
+            this.section.meta.layerDisplay[key].applyOpacity = apo.checked;
+            syncOpcEnabledT();
+            this.renderComposite();
+            if (App.activeSectionId === this.section.id) Toolbar.refreshOpacity();
+            if (App && App.queueSave) App.queueSave();
         });
         actions.querySelector('.rm').addEventListener('click', () => {
             onClose();
@@ -2463,6 +2496,12 @@ class SectionPanel {
             return r;
         };
         const isHeLike = /HE_STAIN|IF_STAIN/i.test(key);
+        const applyOn = settings.applyOpacity !== false;
+        const applyRow = mkRow('Transparency',
+            '<label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;color:#1e293b;">' +
+                '<input type="checkbox" class="apo"' + (applyOn ? ' checked' : '') + '> Apply opacity (透明化を有効)' +
+            '</label>');
+        pop.appendChild(applyRow);
         const opcRow = mkRow('Opacity (%)', '<input type="number" min="0" max="100" step="1" value="' + Math.round(settings.opacity * 100) + '" class="opc" style="width:100%;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;">');
         pop.appendChild(opcRow);
         if (isHeLike) {
@@ -2486,7 +2525,25 @@ class SectionPanel {
         this.layerPopover = pop;
 
         const opc = pop.querySelector('.opc');
+        const apo = pop.querySelector('.apo');
+        const syncOpcEnabled = () => {
+            const on = apo.checked;
+            opc.disabled = !on;
+            opc.style.opacity = on ? '1' : '0.5';
+        };
+        syncOpcEnabled();
         opc.addEventListener('change', () => { settings.opacity = Math.max(0, Math.min(1, (parseInt(opc.value) || 0) / 100)); this.renderComposite(); });
+        apo.addEventListener('change', () => {
+            settings.applyOpacity = apo.checked;
+            this.section.meta = this.section.meta || {};
+            this.section.meta.layerDisplay = this.section.meta.layerDisplay || {};
+            this.section.meta.layerDisplay[key] = this.section.meta.layerDisplay[key] || {};
+            this.section.meta.layerDisplay[key].applyOpacity = apo.checked;
+            syncOpcEnabled();
+            this.renderComposite();
+            if (App.activeSectionId === this.section.id) Toolbar.refreshOpacity();
+            if (App && App.queueSave) App.queueSave();
+        });
         if (isHeLike) {
             const gs = pop.querySelector('.gs');
             gs.addEventListener('change', () => {
@@ -5656,9 +5713,16 @@ const Toolbar = {
         const op = p ? p.getOpacity() : null;
         if (!p || !op || !op.available) {
             this.opacityInp.value = ''; this.opacityInp.disabled = true;
+            this.opacityInp.title = '';
             return;
         }
-        this.opacityInp.disabled = false;
+        // If the active MSI layer has applyOpacity disabled per its gear popover,
+        // greying out the toolbar input makes the dead-end behaviour obvious.
+        const activeKey = p.effectiveActiveMsiKey && p.effectiveActiveMsiKey();
+        const activeSettings = activeKey ? p.imageSettings[activeKey] : null;
+        const applyOff = activeSettings && activeSettings.applyOpacity === false;
+        this.opacityInp.disabled = !!applyOff;
+        this.opacityInp.title = applyOff ? 'このレイヤーは Apply opacity が OFF です' : '';
         if (document.activeElement !== this.opacityInp) this.opacityInp.value = String(op.value);
     },
 
