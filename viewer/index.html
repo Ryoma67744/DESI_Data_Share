@@ -44,6 +44,7 @@ body.share-mode #project-picker,
 body.share-mode #project-name-input,
 body.share-mode #tb-add-heif,
 body.share-mode #tb-add-msi,
+body.share-mode #tb-align-heif,
 body.share-mode #tb-del-section { display:none !important; }
 body.share-mode #share-mode-banner { display:flex !important; }
 body.share-mode .picker-row .picker-row-dot,
@@ -326,6 +327,7 @@ body.share-mode .thumb-file-group .file-actions [data-action="delete-file"] { di
                 <span class="tb-divider"></span>
                 <button class="tb-btn" id="tb-add-heif" title="Register HE or IF TIFF with transform JSON">+ HE/IF</button>
                 <button class="tb-btn" id="tb-add-msi" title="Register MSI xlsx or txt as a layer">+ MSI</button>
+                <button class="tb-btn" id="tb-align-heif" title="HE/IF を MSI と重ね合わせる (manual / landmark)">Align</button>
                 <button class="tb-btn danger" id="tb-del-section" title="Delete the active section">×</button>
                 <span class="tb-divider"></span>
                 <span class="tb-group">
@@ -3172,6 +3174,481 @@ const Wizards = {
         return await p;
     },
 
+    // ===========================================================================
+    // HE/IF ⇔ MSI in-app alignment.
+    //
+    // Builds a 3x3 affine matrix HE-pixel → MSI-pixel that the existing
+    // renderComposite() picks up via section.meta.world_coords.T_he_to_msi.
+    // Two interaction modes are bundled in one modal:
+    //   - Manual: flip / scale / rotate / offset sliders, applied in real time
+    //     to the section panel behind the modal so the user sees their tweaks
+    //     immediately.
+    //   - Landmark: click ≥ 3 corresponding points on the HE thumb and the MSI
+    //     thumb, then "Solve" runs a complex-LSE similarity transform and
+    //     populates the sliders.
+    //
+    // The modal also exposes manual entry for the MSI pixel size
+    // (μm/px, X and Y) which feeds section.meta.world_coords.msi_um_per_px.
+    // Cancel restores the snapshot taken on open; Save commits to IndexedDB.
+    // ===========================================================================
+    async openAlignmentModal(panel) {
+        if (!panel || !panel.section) return null;
+        const sec = panel.section;
+        sec.images = sec.images || {};
+        const heKeys = Object.keys(sec.images).filter(k => /HE_STAIN|IF_STAIN/i.test(k))
+            .concat(Object.keys(sec.images).filter(k => !/HE_STAIN|IF_STAIN/i.test(k)
+                                                     && !/^MSI_/i.test(k)));
+        if (!heKeys.length) {
+            alert('HE / IF レイヤーが登録されていません。先に「+ HE/IF」で画像を追加してください。');
+            return null;
+        }
+
+        const safe = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
+        // ---- Math helpers ----------------------------------------------------
+        const buildHeToMsiAffine = (st) => {
+            const sx = (st.flip_lr ? -1 : 1) * (st.scale_pct / 100);
+            const sy = (st.flip_ud ? -1 : 1) * (st.scale_pct / 100);
+            const th = st.rotate_deg * Math.PI / 180;
+            const cos = Math.cos(th), sin = Math.sin(th);
+            // T = T(tx,ty) · R(theta) · S(sx,sy)
+            return [
+                [ cos * sx, -sin * sy, st.offx ],
+                [ sin * sx,  cos * sy, st.offy ],
+                [ 0, 0, 1 ],
+            ];
+        };
+        const solveSimilarity = (srcPts, dstPts) => {
+            if (srcPts.length < 2 || srcPts.length !== dstPts.length) {
+                throw new Error('対応点が 2 組以上必要です');
+            }
+            const N = srcPts.length;
+            let sxs = 0, sys = 0, sxd = 0, syd = 0;
+            for (let i = 0; i < N; i++) {
+                sxs += srcPts[i][0]; sys += srcPts[i][1];
+                sxd += dstPts[i][0]; syd += dstPts[i][1];
+            }
+            const meanS = [sxs / N, sys / N];
+            const meanD = [sxd / N, syd / N];
+            let num_re = 0, num_im = 0, den = 0;
+            for (let i = 0; i < N; i++) {
+                const xs = srcPts[i][0] - meanS[0], ys = srcPts[i][1] - meanS[1];
+                const xd = dstPts[i][0] - meanD[0], yd = dstPts[i][1] - meanD[1];
+                num_re += xd * xs + yd * ys;
+                num_im += yd * xs - xd * ys;
+                den    += xs * xs + ys * ys;
+            }
+            if (den < 1e-12) throw new Error('退化した対応点 (全て同じ位置?) です');
+            const a_re = num_re / den, a_im = num_im / den;
+            const s = Math.hypot(a_re, a_im);
+            const theta = Math.atan2(a_im, a_re);
+            const tx = meanD[0] - (a_re * meanS[0] - a_im * meanS[1]);
+            const ty = meanD[1] - (a_im * meanS[0] + a_re * meanS[1]);
+            return { s, theta, tx, ty };
+        };
+
+        // ---- Snapshot for Cancel --------------------------------------------
+        sec.meta = sec.meta || {};
+        sec.meta.world_coords = sec.meta.world_coords || {};
+        const initial = {
+            T:      sec.meta.world_coords.T_he_to_msi
+                        ? JSON.parse(JSON.stringify(sec.meta.world_coords.T_he_to_msi))
+                        : null,
+            msi_um: sec.meta.world_coords.msi_um_per_px
+                        ? JSON.parse(JSON.stringify(sec.meta.world_coords.msi_um_per_px))
+                        : null,
+        };
+
+        // ---- State -----------------------------------------------------------
+        sec.meta.alignment = sec.meta.alignment || {};
+        const layerKey = heKeys[0];
+        const loadStateFor = (key) => {
+            const a = sec.meta.alignment[key] || {};
+            return {
+                layerKey: key,
+                flip_lr:    !!a.flip_lr,
+                flip_ud:    !!a.flip_ud,
+                scale_pct:  Number.isFinite(a.scale_pct)  ? a.scale_pct  : 100,
+                rotate_deg: Number.isFinite(a.rotate_deg) ? a.rotate_deg : 0,
+                offx:       Number.isFinite(a.offx) ? a.offx : 0,
+                offy:       Number.isFinite(a.offy) ? a.offy : 0,
+                landmarks:  { he: (a.landmarks && a.landmarks.he ? a.landmarks.he.slice() : []),
+                              msi: (a.landmarks && a.landmarks.msi ? a.landmarks.msi.slice() : []) },
+                pickMode:   'none',
+            };
+        };
+        const state = loadStateFor(layerKey);
+        const msiUm = sec.meta.world_coords.msi_um_per_px || { x: 50, y: 50 };
+        state.msi_um_x = Number.isFinite(msiUm.x) ? msiUm.x : 50;
+        state.msi_um_y = Number.isFinite(msiUm.y) ? msiUm.y : 50;
+
+        // ---- Modal HTML ------------------------------------------------------
+        const layerOpts = heKeys.map(k => `<option value="${safe(k)}"${k===state.layerKey?' selected':''}>${safe(k)}</option>`).join('');
+        const html = `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+              <h2 style="margin:0;">HE/IF ⇔ MSI Alignment</h2>
+              <label style="font-size:11px;color:#475569;">
+                Layer: <select data-align-layer style="font-size:11px;padding:2px 6px;border:1px solid #cbd5e1;border-radius:3px;">${layerOpts}</select>
+              </label>
+            </div>
+            <p style="font-size:11px;color:#475569;margin-top:0;">
+              スライダーまたは対応点クリックで HE/IF を MSI に重ねます。背後の Section パネルでリアルタイムにプレビューされます。
+            </p>
+
+            <fieldset style="margin-top:8px;border:1px solid #e2e8f0;border-radius:5px;padding:8px 10px;">
+              <legend style="font-size:11px;color:#1e293b;font-weight:600;padding:0 6px;">MSI pixel size</legend>
+              <div style="display:flex;gap:14px;align-items:center;font-size:11px;">
+                <label style="display:flex;align-items:center;gap:4px;">
+                  X: <input type="number" data-msi-um-x step="0.01" min="0.01" value="${state.msi_um_x}" style="width:80px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:3px;"> μm/px
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;">
+                  Y: <input type="number" data-msi-um-y step="0.01" min="0.01" value="${state.msi_um_y}" style="width:80px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:3px;"> μm/px
+                </label>
+                <span style="color:#64748b;">世界座標 (μm) と ROI の物理スケールを決める値</span>
+              </div>
+            </fieldset>
+
+            <fieldset style="margin-top:8px;border:1px solid #e2e8f0;border-radius:5px;padding:8px 10px;">
+              <legend style="font-size:11px;color:#1e293b;font-weight:600;padding:0 6px;">Manual</legend>
+              <div style="display:grid;grid-template-columns:90px 1fr 80px;gap:6px 10px;align-items:center;font-size:11px;">
+                <span>Flip</span>
+                <div style="display:flex;gap:14px;">
+                  <label style="display:flex;gap:3px;align-items:center;"><input type="checkbox" data-flip-lr ${state.flip_lr?'checked':''}> Horizontal</label>
+                  <label style="display:flex;gap:3px;align-items:center;"><input type="checkbox" data-flip-ud ${state.flip_ud?'checked':''}> Vertical</label>
+                </div>
+                <span></span>
+
+                <span>Scale</span>
+                <input type="range" data-scale min="5" max="500" step="0.1" value="${state.scale_pct}">
+                <input type="number" data-scale-num step="0.1" min="0.1" value="${state.scale_pct}" style="width:70px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> %
+
+                <span>Rotate</span>
+                <input type="range" data-rotate min="-180" max="180" step="0.1" value="${state.rotate_deg}">
+                <input type="number" data-rotate-num step="0.1" min="-180" max="180" value="${state.rotate_deg}" style="width:70px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> °
+
+                <span>Offset X</span>
+                <input type="range" data-offx min="-2000" max="2000" step="0.5" value="${state.offx}">
+                <input type="number" data-offx-num step="0.5" value="${state.offx}" style="width:70px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> px
+
+                <span>Offset Y</span>
+                <input type="range" data-offy min="-2000" max="2000" step="0.5" value="${state.offy}">
+                <input type="number" data-offy-num step="0.5" value="${state.offy}" style="width:70px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> px
+              </div>
+            </fieldset>
+
+            <fieldset style="margin-top:8px;border:1px solid #e2e8f0;border-radius:5px;padding:8px 10px;">
+              <legend style="font-size:11px;color:#1e293b;font-weight:600;padding:0 6px;">Landmark mode</legend>
+              <div style="display:flex;gap:6px;align-items:center;font-size:11px;flex-wrap:wrap;">
+                <button type="button" class="btn" data-pick="he">+ HE 点を打つ</button>
+                <button type="button" class="btn" data-pick="msi">+ MSI 点を打つ</button>
+                <button type="button" class="btn primary" data-solve disabled>Solve</button>
+                <span data-pick-status style="color:#64748b;">点: HE 0 / MSI 0</span>
+                <button type="button" class="btn danger" data-clear-lm style="margin-left:auto;">Clear all</button>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+                <div data-thumb-wrap="he" style="position:relative;border:1px solid #cbd5e1;border-radius:4px;overflow:hidden;background:#0f172a;min-height:160px;">
+                  <div style="position:absolute;top:2px;left:6px;color:#fff;font-size:10px;background:rgba(0,0,0,0.5);padding:1px 5px;border-radius:3px;z-index:2;pointer-events:none;">HE</div>
+                  <img data-he-img style="display:block;width:100%;height:auto;cursor:crosshair;user-select:none;" alt="HE">
+                  <svg data-he-svg style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></svg>
+                </div>
+                <div data-thumb-wrap="msi" style="position:relative;border:1px solid #cbd5e1;border-radius:4px;overflow:hidden;background:#0f172a;min-height:160px;">
+                  <div style="position:absolute;top:2px;left:6px;color:#fff;font-size:10px;background:rgba(0,0,0,0.5);padding:1px 5px;border-radius:3px;z-index:2;pointer-events:none;">MSI</div>
+                  <img data-msi-img style="display:block;width:100%;height:auto;cursor:crosshair;user-select:none;" alt="MSI">
+                  <svg data-msi-svg style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></svg>
+                </div>
+              </div>
+              <table data-lm-table style="width:100%;font-size:10px;margin-top:6px;border-collapse:collapse;"></table>
+            </fieldset>
+
+            <div style="display:flex;gap:6px;margin-top:10px;justify-content:space-between;flex-wrap:wrap;">
+              <button type="button" class="btn" data-reset>Reset to identity</button>
+              <div style="display:flex;gap:6px;">
+                <button type="button" class="btn" data-modal-cancel>Cancel</button>
+                <button type="button" class="btn primary" data-save>Save</button>
+              </div>
+            </div>
+        `;
+        const p = openModal(html);
+        const card = openModal._card;
+        card.classList.add('help-card');
+
+        // ---- Wire DOM refs ---------------------------------------------------
+        const $ = (sel) => card.querySelector(sel);
+        const layerSel = $('[data-align-layer]');
+        const flipLrEl = $('[data-flip-lr]');
+        const flipUdEl = $('[data-flip-ud]');
+        const scaleEl  = $('[data-scale]');
+        const scaleNum = $('[data-scale-num]');
+        const rotateEl = $('[data-rotate]');
+        const rotateNum= $('[data-rotate-num]');
+        const offxEl   = $('[data-offx]');
+        const offxNum  = $('[data-offx-num]');
+        const offyEl   = $('[data-offy]');
+        const offyNum  = $('[data-offy-num]');
+        const msiUmXEl = $('[data-msi-um-x]');
+        const msiUmYEl = $('[data-msi-um-y]');
+        const heImg    = $('[data-he-img]');
+        const msiImg   = $('[data-msi-img]');
+        const heSvg    = $('[data-he-svg]');
+        const msiSvg   = $('[data-msi-svg]');
+        const heWrap   = $('[data-thumb-wrap="he"]');
+        const msiWrap  = $('[data-thumb-wrap="msi"]');
+        const pickHeBtn = $('[data-pick="he"]');
+        const pickMsiBtn= $('[data-pick="msi"]');
+        const solveBtn = $('[data-solve]');
+        const clearLmBtn = $('[data-clear-lm]');
+        const pickStatus= $('[data-pick-status]');
+        const lmTable  = $('[data-lm-table]');
+        const resetBtn = $('[data-reset]');
+        const saveBtn  = $('[data-save]');
+
+        // ---- Render preview into the section panel --------------------------
+        let rafId = 0;
+        const writeWorldCoords = () => {
+            sec.meta.world_coords = sec.meta.world_coords || {};
+            sec.meta.world_coords.T_he_to_msi = buildHeToMsiAffine(state);
+            sec.meta.world_coords.msi_um_per_px = { x: state.msi_um_x, y: state.msi_um_y };
+        };
+        const updatePreview = () => {
+            writeWorldCoords();
+            if (rafId) cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(() => {
+                rafId = 0;
+                try { panel.renderComposite(); } catch (e) { console.warn('preview render failed', e); }
+            });
+        };
+
+        // ---- Sliders <-> state ----------------------------------------------
+        const syncUiFromState = () => {
+            flipLrEl.checked = !!state.flip_lr;
+            flipUdEl.checked = !!state.flip_ud;
+            scaleEl.value = state.scale_pct;  scaleNum.value = state.scale_pct;
+            rotateEl.value = state.rotate_deg; rotateNum.value = state.rotate_deg;
+            offxEl.value = state.offx; offxNum.value = state.offx;
+            offyEl.value = state.offy; offyNum.value = state.offy;
+        };
+        const bindPair = (range, num, key, parser) => {
+            const onChange = (val) => {
+                const v = parser(val);
+                if (!Number.isFinite(v)) return;
+                state[key] = v;
+                range.value = v; num.value = v;
+                updatePreview();
+            };
+            range.addEventListener('input', () => onChange(range.value));
+            num.addEventListener('input',   () => onChange(num.value));
+        };
+        bindPair(scaleEl,  scaleNum,  'scale_pct',  v => parseFloat(v));
+        bindPair(rotateEl, rotateNum, 'rotate_deg', v => parseFloat(v));
+        bindPair(offxEl,   offxNum,   'offx',       v => parseFloat(v));
+        bindPair(offyEl,   offyNum,   'offy',       v => parseFloat(v));
+        flipLrEl.addEventListener('change', () => { state.flip_lr = flipLrEl.checked; updatePreview(); });
+        flipUdEl.addEventListener('change', () => { state.flip_ud = flipUdEl.checked; updatePreview(); });
+
+        // ---- MSI um/px ------------------------------------------------------
+        const onMsiUm = () => {
+            const x = parseFloat(msiUmXEl.value);
+            const y = parseFloat(msiUmYEl.value);
+            if (Number.isFinite(x) && x > 0) state.msi_um_x = x;
+            if (Number.isFinite(y) && y > 0) state.msi_um_y = y;
+            writeWorldCoords();
+        };
+        msiUmXEl.addEventListener('input', onMsiUm);
+        msiUmYEl.addEventListener('input', onMsiUm);
+
+        // ---- Layer dropdown -------------------------------------------------
+        layerSel.addEventListener('change', () => {
+            const next = layerSel.value;
+            if (!sec.images[next]) return;
+            // Persist current edits (in-memory only, until Save) for the previous layer
+            sec.meta.alignment[state.layerKey] = {
+                flip_lr: state.flip_lr, flip_ud: state.flip_ud,
+                scale_pct: state.scale_pct, rotate_deg: state.rotate_deg,
+                offx: state.offx, offy: state.offy,
+                landmarks: { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() },
+            };
+            const ns = loadStateFor(next);
+            Object.assign(state, ns);
+            syncUiFromState();
+            updatePreview();
+            populateThumbs();
+            renderLandmarks();
+        });
+
+        // ---- Thumbnails for landmark picking --------------------------------
+        const populateThumbs = async () => {
+            // HE
+            const heRec = sec.images[state.layerKey];
+            if (heRec && heRec.blobId) {
+                const b = await ProjectStorage.getBlob(heRec.blobId);
+                if (b && b.blob) heImg.src = URL.createObjectURL(b.blob);
+            }
+            // MSI: use the first available MSI series source
+            const msiKeys = Object.keys(sec.msiSeries || {}).filter(k => /^MSI_/i.test(k));
+            const msiKey = msiKeys[0];
+            const msiEnt = msiKey ? sec.msiSeries[msiKey] : null;
+            if (msiEnt && msiEnt.blobId) {
+                // We need a thumbnail of the MSI raster. For simplicity, reuse the
+                // existing imageSources cache if loaded; otherwise we point at the
+                // raw blob (xlsx/txt won't render — fall back to a placeholder).
+                const cached = panel.imageSources && panel.imageSources[msiKey];
+                if (cached && cached.src) {
+                    msiImg.src = cached.src;
+                } else {
+                    // unknown — leave dark
+                }
+            }
+        };
+        await populateThumbs();
+
+        // ---- Landmark click handling ----------------------------------------
+        const setPickMode = (mode) => {
+            state.pickMode = (state.pickMode === mode) ? 'none' : mode;
+            pickHeBtn.style.background  = state.pickMode === 'he'  ? '#dbeafe' : '';
+            pickMsiBtn.style.background = state.pickMode === 'msi' ? '#dbeafe' : '';
+        };
+        pickHeBtn.addEventListener('click',  () => setPickMode('he'));
+        pickMsiBtn.addEventListener('click', () => setPickMode('msi'));
+
+        const thumbClickToPixel = (ev, imgEl) => {
+            const rect = imgEl.getBoundingClientRect();
+            const nW = imgEl.naturalWidth  || rect.width;
+            const nH = imgEl.naturalHeight || rect.height;
+            const x = (ev.clientX - rect.left) / Math.max(1, rect.width)  * nW;
+            const y = (ev.clientY - rect.top)  / Math.max(1, rect.height) * nH;
+            return [x, y];
+        };
+
+        heWrap.addEventListener('click', (ev) => {
+            if (state.pickMode !== 'he') return;
+            if (!heImg.naturalWidth) return;
+            state.landmarks.he.push(thumbClickToPixel(ev, heImg));
+            renderLandmarks();
+        });
+        msiWrap.addEventListener('click', (ev) => {
+            if (state.pickMode !== 'msi') return;
+            if (!msiImg.naturalWidth) return;
+            state.landmarks.msi.push(thumbClickToPixel(ev, msiImg));
+            renderLandmarks();
+        });
+
+        const renderLandmarks = () => {
+            const drawDots = (svg, pts, imgEl) => {
+                if (!imgEl.naturalWidth) { svg.innerHTML = ''; return; }
+                const rect = imgEl.getBoundingClientRect();
+                const sx = rect.width  / imgEl.naturalWidth;
+                const sy = rect.height / imgEl.naturalHeight;
+                svg.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
+                svg.innerHTML = pts.map((p, i) =>
+                    `<circle cx="${p[0]*sx}" cy="${p[1]*sy}" r="6" fill="#fde047" stroke="#0f172a" stroke-width="1.5"></circle>` +
+                    `<text x="${p[0]*sx}" y="${p[1]*sy + 4}" text-anchor="middle" font-size="10" font-weight="700" fill="#0f172a">${i+1}</text>`
+                ).join('');
+            };
+            drawDots(heSvg,  state.landmarks.he,  heImg);
+            drawDots(msiSvg, state.landmarks.msi, msiImg);
+            const nHe = state.landmarks.he.length;
+            const nMsi = state.landmarks.msi.length;
+            pickStatus.textContent = `点: HE ${nHe} / MSI ${nMsi}`;
+            const ready = nHe >= 2 && nHe === nMsi;
+            solveBtn.disabled = !ready;
+            // Table
+            const rows = Math.max(nHe, nMsi);
+            let html = '<thead><tr style="background:#f1f5f9;"><th style="border:1px solid #cbd5e1;padding:2px 4px;">#</th>'
+                     + '<th style="border:1px solid #cbd5e1;padding:2px 4px;">HE (x, y)</th>'
+                     + '<th style="border:1px solid #cbd5e1;padding:2px 4px;">MSI (x, y)</th>'
+                     + '<th style="border:1px solid #cbd5e1;padding:2px 4px;"></th></tr></thead><tbody>';
+            for (let i = 0; i < rows; i++) {
+                const he = state.landmarks.he[i];
+                const ms = state.landmarks.msi[i];
+                html += `<tr><td style="border:1px solid #e2e8f0;padding:2px 4px;text-align:center;">${i+1}</td>`
+                     +  `<td style="border:1px solid #e2e8f0;padding:2px 4px;">${he ? '('+he[0].toFixed(1)+', '+he[1].toFixed(1)+')' : '—'}</td>`
+                     +  `<td style="border:1px solid #e2e8f0;padding:2px 4px;">${ms ? '('+ms[0].toFixed(1)+', '+ms[1].toFixed(1)+')' : '—'}</td>`
+                     +  `<td style="border:1px solid #e2e8f0;padding:2px 4px;text-align:center;"><button type="button" class="btn danger" data-rm-lm="${i}" style="font-size:10px;padding:0 6px;">×</button></td></tr>`;
+            }
+            html += '</tbody>';
+            lmTable.innerHTML = html;
+            lmTable.querySelectorAll('[data-rm-lm]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const i = parseInt(btn.getAttribute('data-rm-lm'), 10);
+                    state.landmarks.he.splice(i, 1);
+                    state.landmarks.msi.splice(i, 1);
+                    renderLandmarks();
+                });
+            });
+        };
+        renderLandmarks();
+        // Re-render dots if the modal is resized so they stay aligned to the img.
+        window.addEventListener('resize', renderLandmarks);
+
+        clearLmBtn.addEventListener('click', () => {
+            state.landmarks.he = [];
+            state.landmarks.msi = [];
+            renderLandmarks();
+        });
+
+        solveBtn.addEventListener('click', () => {
+            try {
+                const r = solveSimilarity(state.landmarks.he, state.landmarks.msi);
+                state.scale_pct  = r.s * 100;
+                state.rotate_deg = r.theta * 180 / Math.PI;
+                state.offx = r.tx;
+                state.offy = r.ty;
+                syncUiFromState();
+                updatePreview();
+            } catch (e) {
+                alert('Solve に失敗しました: ' + (e.message || e));
+            }
+        });
+
+        // ---- Reset / Cancel / Save ------------------------------------------
+        resetBtn.addEventListener('click', () => {
+            state.flip_lr = false; state.flip_ud = false;
+            state.scale_pct = 100; state.rotate_deg = 0;
+            state.offx = 0; state.offy = 0;
+            syncUiFromState();
+            updatePreview();
+        });
+
+        const restoreSnapshot = () => {
+            if (initial.T) sec.meta.world_coords.T_he_to_msi = initial.T;
+            else delete sec.meta.world_coords.T_he_to_msi;
+            if (initial.msi_um) sec.meta.world_coords.msi_um_per_px = initial.msi_um;
+            else delete sec.meta.world_coords.msi_um_per_px;
+            try { panel.renderComposite(); } catch (e) {}
+        };
+        // The default Cancel button (data-modal-cancel) is wired by openModal
+        // to remove the backdrop; piggyback on the resolve to revert state.
+        const origClose = card._close;
+        card._close = (val) => {
+            if (val === 'saved') {
+                origClose && origClose(val);
+                return;
+            }
+            restoreSnapshot();
+            origClose && origClose(null);
+        };
+
+        saveBtn.addEventListener('click', () => {
+            // Persist alignment params alongside T for round-trip editing.
+            sec.meta.alignment[state.layerKey] = {
+                flip_lr: state.flip_lr, flip_ud: state.flip_ud,
+                scale_pct: state.scale_pct, rotate_deg: state.rotate_deg,
+                offx: state.offx, offy: state.offy,
+                landmarks: { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() },
+            };
+            // T and msi_um_per_px are already up to date thanks to writeWorldCoords()
+            writeWorldCoords();
+            try { App.queueSave(0); } catch (e) {}
+            try { panel.renderComposite(); } catch (e) {}
+            if (card._close) card._close('saved');
+        });
+
+        // First-time render uses the loaded state (might be the existing T or
+        // the identity if no alignment yet).
+        updatePreview();
+        return p;
+    },
+
     async openHeIfWizard(panel) {
         const html = `
             <h2>Register HE / IF layer</h2>
@@ -4547,6 +5024,7 @@ const Toolbar = {
         this.rotationInp = document.getElementById('tb-rotation');
         this.addHeIfBtn = document.getElementById('tb-add-heif');
         this.addMsiBtn = document.getElementById('tb-add-msi');
+        this.alignHeIfBtn = document.getElementById('tb-align-heif');
         this.delBtn = document.getElementById('tb-del-section');
         this.rotResetBtn = document.getElementById('tb-rot-reset');
         this.syncButtons = this.el.querySelectorAll('.sync-toggle');
@@ -4560,6 +5038,9 @@ const Toolbar = {
 
         this.addHeIfBtn.addEventListener('click', () => { const p = this.activePanel(); if (p) Wizards.openHeIfWizard(p); });
         this.addMsiBtn.addEventListener('click',  () => { const p = this.activePanel(); if (p) Wizards.openMsiWizard(p); });
+        if (this.alignHeIfBtn) this.alignHeIfBtn.addEventListener('click', () => {
+            const p = this.activePanel(); if (p) Wizards.openAlignmentModal(p);
+        });
         this.delBtn.addEventListener('click', () => {
             const p = this.activePanel();
             if (!p) return;
@@ -4678,6 +5159,13 @@ const Toolbar = {
         const has = !!activePanel;
         if (this.addHeIfBtn) this.addHeIfBtn.disabled = !has;
         if (this.addMsiBtn) this.addMsiBtn.disabled = !has;
+        if (this.alignHeIfBtn) {
+            // Only enable when there is at least one HE/IF layer to align.
+            const hasHe = has && activePanel && activePanel.section &&
+                          activePanel.section.images &&
+                          Object.keys(activePanel.section.images).length > 0;
+            this.alignHeIfBtn.disabled = !hasHe;
+        }
         if (this.delBtn) this.delBtn.disabled = !has;
     },
 
