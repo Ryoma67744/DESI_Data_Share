@@ -221,18 +221,15 @@ body.splitting-v { cursor:row-resize !important; }
 #view-mode-toggle button:not(:last-child) { border-right:1px solid #e5e7eb; }
 #method-rows tr.method-row .range-input { width:64px; padding:1px 3px; border:1px solid #cbd5e1; border-radius:3px; font-size:10px; text-align:right; background:#fff; }
 #method-rows tr.method-row .range-input:focus { outline:1px solid #60a5fa; }
-/* Force vertical scrolling on the Method (MRM) panel: <details> + flex-col
-   wraps non-summary children in Chromium's anonymous ::details-content
-   slot, so a direct-child selector (`#method-panel > #method-body`)
-   matches nothing. Use the id directly and clamp height against the
-   viewport so the compound list always scrolls inside the panel even
-   when the splitter shrinks the panel below the table's natural
-   height. */
+/* Force vertical scrolling on the Method (MRM) panel.  The body's
+   max-height is written from JS to track the splitter-controlled
+   #method-panel height (see syncMethodBody), so any panel size yields
+   a properly-scrollable compound list. CSS only enforces the basic
+   scroll container behaviour. */
 #method-panel { display:flex !important; flex-direction:column; }
 #method-body {
     flex:1 1 0;
     min-height:0;
-    max-height:calc(100vh - 200px);
     overflow-y:auto !important;
 }
 /* In share mode, hide MSI machine-parameter columns (Precursor / Fragment /
@@ -3240,6 +3237,17 @@ function setupSplitters() {
     }
 
     const sRoiMethod = document.getElementById('splitter-roi-method');
+    // Keep #method-body's max-height in lock-step with the splitter-driven
+    // #method-panel height so the compound list always scrolls inside the
+    // panel — independent of viewport size — and the bottom row is reachable
+    // at any panel height. Summary row is ~28 px (font 11 px + padding 2×4).
+    const SUMMARY_H = 28;
+    const syncMethodBody = () => {
+        const body = document.getElementById('method-body');
+        if (!body || !methodPanel) return;
+        const h = methodPanel.getBoundingClientRect().height;
+        body.style.maxHeight = Math.max(0, h - SUMMARY_H) + 'px';
+    };
     if (sRoiMethod && methodPanel && sidebarLeft) {
         let initial = 0;
         sRoiMethod.addEventListener('pointerdown', () => { initial = methodPanel.getBoundingClientRect().height; });
@@ -3247,8 +3255,15 @@ function setupSplitters() {
             const sidebarH = sidebarLeft.getBoundingClientRect().height;
             const h = Math.min(sidebarH - 120, Math.max(80, initial - dy));
             methodPanel.style.height = h + 'px';
+            syncMethodBody();
             localStorage.setItem(LS.method, String(Math.round(h)));
         });
+    }
+    if (methodPanel) {
+        syncMethodBody();
+        if (typeof ResizeObserver !== 'undefined') {
+            new ResizeObserver(syncMethodBody).observe(methodPanel);
+        }
     }
 
     const sGraphMemo = document.getElementById('splitter-graph-memo');
