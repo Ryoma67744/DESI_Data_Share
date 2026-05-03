@@ -10,14 +10,16 @@
 2. [プロジェクトを開く](#2-プロジェクトを開く)
 3. [HE / IF レイヤーを登録](#3-he--if-レイヤーを登録)
 4. [MSI レイヤーを登録](#4-msi-レイヤーを登録)
-5. [ROI を引く](#5-roi-を引く)
-6. [Memo の入力](#6-memo-の入力)
-7. [Publish to share](#7-publish-to-share)
-8. [共有 URL とパスワードの渡し方](#8-共有-url-とパスワードの渡し方)
-9. [再 publish の挙動](#9-再-publish-の挙動)
-10. [アップロード進捗 / 大ファイル対策](#10-アップロード進捗--大ファイル対策)
-11. [Storage 容量の目安](#11-storage-容量の目安)
-12. [困ったときは](#12-困ったときは)
+5. [Align — HE/IF を MSI に重ねる](#5-align--heif-を-msi-に重ねる)
+6. [レイヤー個別の表示設定 (歯車 ⚙)](#6-レイヤー個別の表示設定-歯車-)
+7. [ROI を引く](#7-roi-を引く)
+8. [Memo の入力](#8-memo-の入力)
+9. [Publish to share](#9-publish-to-share)
+10. [共有 URL とパスワードの渡し方](#10-共有-url-とパスワードの渡し方)
+11. [再 publish の挙動](#11-再-publish-の挙動)
+12. [アップロード進捗 / 大ファイル対策](#12-アップロード進捗--大ファイル対策)
+13. [Storage 容量の目安](#13-storage-容量の目安)
+14. [困ったときは](#14-困ったときは)
 
 ---
 
@@ -70,7 +72,7 @@
    ```
 4. `Register` で確定 → MSI 座標系に整合してキャンバスに重なる
 
-> 変換 JSON を省略すると HE/IF はそのキャンバスサイズで表示 (位置整合なし)。
+> 変換 JSON を省略すると HE/IF はそのキャンバスサイズで表示 (位置整合なし)。後から **`Align` ボタン**(各切片パネル上部)で対話的にアライメントできます — 詳細は §5。
 
 ---
 
@@ -93,7 +95,113 @@
 
 ---
 
-## 5. ROI を引く
+## 5. Align — HE/IF を MSI に重ねる
+
+各切片パネル上部の **`Align`** ボタンを押すと、HE/IF を MSI 座標系に整合させるための専用モーダルが開きます。`+ HE/IF` 登録時に変換 JSON を渡していない場合や、再アライメントしたい場合に使います。
+
+<div style="border:1px solid #cbd5e1;border-radius:6px;padding:10px;background:#f8fafc;margin:10px 0;font-size:12px;">
+  <div style="font-weight:600;color:#0f172a;margin-bottom:6px;">Align モーダルの構成</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+    <div style="border:1px solid #94a3b8;border-radius:4px;padding:6px;background:#fff;">
+      <div style="font-weight:600;font-size:11px;">左パネル: HE/IF サムネ</div>
+      <div style="color:#64748b;font-size:11px;">Layer ドロップダウンで切替<br>クリックでランドマーク追加</div>
+    </div>
+    <div style="border:1px solid #94a3b8;border-radius:4px;padding:6px;background:#fff;">
+      <div style="font-weight:600;font-size:11px;">右パネル: MSI サムネ (Plasma)</div>
+      <div style="color:#64748b;font-size:11px;">MSI ドロップダウンで化合物切替<br>「TIC (合成)」が先頭に出る場合あり</div>
+    </div>
+  </div>
+  <div style="margin-top:6px;border:1px dashed #cbd5e1;border-radius:4px;padding:6px;background:#fafafa;">
+    <div style="font-weight:600;font-size:11px;">下部: MSI pixel size / Manual / Solve</div>
+    <div style="color:#64748b;font-size:11px;">μm/px・Flip・Scale・Rotate・Offset X/Y</div>
+  </div>
+</div>
+
+### 5-1. MSI セレクタ
+
+- 化合物名のドロップダウンで MSI サムネを切替できます。
+- **TIC (合成)** … MRM トランジションを多数登録していて `MSI_TIC` レイヤーが無いとき、先頭に自動で挿入されます。全 MSI 系列の輝度を加算した擬似 TIC で、ランドマーク picking 用に使うのが目的です。
+- いずれの MSI も **Plasma カラーマップ** で着色して表示されるので、グレースケールよりも信号領域が見やすくなっています。
+
+### 5-2. MSI pixel size
+
+`X / Y` (μm/px) を入力。これが ROI の物理スケール (μm 単位) や、メイン canvas 左下の **スケールバー** の根拠になります。一般に DESI は X==Y の正方形ピクセルなので 1 か所だけ入力して OK。
+
+### 5-3. Manual セクション (リアルタイムスライダー)
+
+| 項目 | 範囲 | 効果 |
+|---|---|---|
+| Flip Horizontal / Vertical | チェック | HE を左右 / 上下反転 |
+| Scale | 5–500 % | HE の拡大縮小 |
+| Rotate | -180°–180° | HE の回転 |
+| Offset X / Y | -2000–2000 px | HE の平行移動 |
+
+**スライダーまたは数値 input** どちらでも編集可能。背後の Section パネルがリアルタイムでプレビューされるため、アライメント結果を視認しながら微調整できます。
+
+### 5-4. Landmark モード
+
+両パネルに対応点を ≥ 3 組クリックして打ち、**`Solve`** を押すと complex-LSE の similarity transform (回転 + 等方スケール + 並進) を解いて Manual のスライダーに反映します。
+
+| ボタン | 動作 |
+|---|---|
+| `Reset to identity` | Manual の値をすべて初期値に戻す |
+| `Clear all` | 打ったランドマーク両側を全消去 |
+| `Solve` | ランドマークから Affine を推定して Manual に反映 |
+
+### 5-5. Cancel / Save
+
+- **Cancel**: モーダルを開いた時点の値に戻す。プレビューも巻き戻る。
+- **Save**: 現在の値を `sec.meta.world_coords.T_he_to_msi` と `msi_um_per_px` に書き込み、IndexedDB に永続化。ROI の物理スケールにも即時反映。
+
+> Save 後にメイン canvas を見ると、HE が MSI の下、MSI が上に乗った状態で描画され、左下に **スケールバー** が出ます。バーは round な値 (10/20/50/100/200/500 μm, 1/2/5/10 mm) を自動選択し、**マウスホイールで拡大すると刻みが細かく** なります。
+
+---
+
+## 6. レイヤー個別の表示設定 (歯車 ⚙)
+
+各レイヤーのチップ右端の **歯車 ⚙** をクリックすると、そのレイヤー専用の小ポップオーバーが開きます。サムネイル画像クリックでも近い設定が出ます。
+
+<div style="border:1px solid #cbd5e1;border-radius:6px;padding:10px;background:#fff;margin:10px 0;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+  <div style="border:1px solid #94a3b8;border-radius:4px;padding:8px;background:#f8fafc;">
+    <div style="font-weight:600;color:#0f172a;margin-bottom:4px;">MSI レイヤーの場合</div>
+    <ul style="margin:4px 0 0 1.2em;padding:0;color:#475569;font-size:11px;line-height:1.6;">
+      <li><b>Apply opacity</b> ✓ (既定 ON)</li>
+      <li>Opacity (0–100%)</li>
+      <li>Intensity range (vmin / vmax)</li>
+    </ul>
+  </div>
+  <div style="border:1px solid #2563eb;border-radius:4px;padding:8px;background:#eff6ff;">
+    <div style="font-weight:600;color:#1d4ed8;margin-bottom:4px;">HE / IF レイヤーの場合</div>
+    <ul style="margin:4px 0 0 1.2em;padding:0;color:#475569;font-size:11px;line-height:1.6;">
+      <li><b>Apply opacity</b> ☐ (既定 OFF — 常時不透明)</li>
+      <li>Opacity (チェック OFF 時はグレーアウト)</li>
+      <li><b>Grayscale (モノクロ表示)</b></li>
+    </ul>
+  </div>
+</div>
+
+### 6-1. Apply opacity (透明化を反映するか)
+
+- **チェック ON**: Opacity スライダーの値が描画に反映される。
+- **チェック OFF**: スライダー値を無視して常時 100% で描画。スライダーは見えるがグレーアウト。
+- **既定**: HE/IF は OFF、MSI は ON。これにより HE は常に不透明な「下地」として残り、MSI ヒートマップだけ Opacity で薄められる体験が標準になります。
+- 状態は `sec.meta.layerDisplay[key].applyOpacity` に永続化。リロード後も保持。
+
+> ツールバー上部の Opacity 入力もこの設定と連動します。アクティブ MSI で Apply opacity OFF なら、ツールバーの Opacity がグレーアウトして「このレイヤーは Apply opacity が OFF です」とツールチップが出ます。
+
+### 6-2. Grayscale (HE/IF のみ)
+
+- HE/IF レイヤーをモノクロ化して描画。MSI の Plasma 色を最大コントラストで見せたいときに有用。
+- BT.601 luma で R/G/B → 単色化(透明度はそのまま)。
+- 状態は `sec.meta.layerDisplay[key].grayscale` に永続化。
+
+### 6-3. レイヤー描画順 (HE → 他 → MSI)
+
+メイン canvas は常に **HE/IF が下、MSI が上(加算合成)** の順で描画されます。これは表示状態 (visibleLayers) の登録順に依存しない仕様で、HE が MSI を覆い隠さないようにする目的の挙動です。
+
+---
+
+## 7. ROI を引く
 
 1. アクティブにしたい切片パネルをクリック
 2. ROI LIST 上の `+ 新規` をクリック (描画モード ON)
@@ -107,7 +215,7 @@
 
 ---
 
-## 6. Memo の入力
+## 8. Memo の入力
 
 ビューア右下の Memo パネル:
 
@@ -127,7 +235,7 @@
 
 ---
 
-## 7. Publish to share
+## 9. Publish to share
 
 ヘッダの `Publish to share` ボタン:
 
@@ -149,11 +257,11 @@
 
 > Master password を知らない第三者は、たとえ Supabase の anon key を取得していても publish も Storage 書き込みもできません。サーバ側 (Supabase) の bcrypt 照合で守られています。
 
-> 再 publish の挙動は次節「9. 再 publish の挙動」を必ずご確認ください。
+> 再 publish の挙動は次節「11. 再 publish の挙動」を必ずご確認ください。
 
 ---
 
-## 8. 共有 URL とパスワードの渡し方
+## 10. 共有 URL とパスワードの渡し方
 
 - URL: `https://.../viewer/index.html#share=<slug>`
 - viewer password を **別チャネル** (Slack / メール) で
@@ -163,7 +271,7 @@
 
 ---
 
-## 9. 再 publish の挙動
+## 11. 再 publish の挙動
 
 ★重要: **同じ slug で 2 回目以降の publish を実行すると、サーバ側のプロジェクトは完全に上書きされます。**
 
@@ -184,7 +292,7 @@
 
 ---
 
-## 10. アップロード進捗 / 大ファイル対策
+## 12. アップロード進捗 / 大ファイル対策
 
 実装済みの対策:
 
@@ -200,7 +308,7 @@
 
 ---
 
-## 11. Storage 容量の目安
+## 13. Storage 容量の目安
 
 | プラン | Storage | 帯域 | 月額 |
 | --- | --- | --- | --- |
@@ -213,7 +321,7 @@
 
 ---
 
-## 12. 困ったときは
+## 14. 困ったときは
 
 | 症状 | 対処 |
 | --- | --- |

@@ -10,14 +10,16 @@ This guide is for the **master / admin** publishing data with DESI Data Share. I
 2. [Opening a project](#2-opening-a-project)
 3. [Registering HE / IF layers](#3-registering-he--if-layers)
 4. [Registering MSI layers](#4-registering-msi-layers)
-5. [Drawing ROIs](#5-drawing-rois)
-6. [Filling in the Memo](#6-filling-in-the-memo)
-7. [Publish to share](#7-publish-to-share)
-8. [Sharing the URL & passwords](#8-sharing-the-url--passwords)
-9. [What happens on re-publish](#9-what-happens-on-re-publish)
-10. [Upload progress / large files](#10-upload-progress--large-files)
-11. [Storage capacity](#11-storage-capacity)
-12. [Troubleshooting](#12-troubleshooting)
+5. [Align — overlaying HE/IF on MSI](#5-align--overlaying-heif-on-msi)
+6. [Per-layer display settings (gear ⚙)](#6-per-layer-display-settings-gear-)
+7. [Drawing ROIs](#7-drawing-rois)
+8. [Filling in the Memo](#8-filling-in-the-memo)
+9. [Publish to share](#9-publish-to-share)
+10. [Sharing the URL & passwords](#10-sharing-the-url--passwords)
+11. [What happens on re-publish](#11-what-happens-on-re-publish)
+12. [Upload progress / large files](#12-upload-progress--large-files)
+13. [Storage capacity](#13-storage-capacity)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -70,7 +72,7 @@ Click `+ HE/IF` on a section panel:
    ```
 4. `Register` overlays the image aligned to the MSI coordinate system
 
-> Without a transform JSON the HE/IF is shown at the bare canvas size (no alignment).
+> Without a transform JSON the HE/IF is shown at the bare canvas size (no alignment). You can re-align it interactively later via the **`Align`** button on each section panel — see §5.
 
 ---
 
@@ -93,7 +95,113 @@ Click `+ HE/IF` on a section panel:
 
 ---
 
-## 5. Drawing ROIs
+## 5. Align — overlaying HE/IF on MSI
+
+Click **`Align`** on a section panel to open a modal that aligns HE/IF layers to the MSI coordinate system. Use this when no transform JSON was supplied at registration time, or whenever you want to re-align manually.
+
+<div style="border:1px solid #cbd5e1;border-radius:6px;padding:10px;background:#f8fafc;margin:10px 0;font-size:12px;">
+  <div style="font-weight:600;color:#0f172a;margin-bottom:6px;">Align modal layout</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+    <div style="border:1px solid #94a3b8;border-radius:4px;padding:6px;background:#fff;">
+      <div style="font-weight:600;font-size:11px;">Left: HE/IF thumbnail</div>
+      <div style="color:#64748b;font-size:11px;">Layer dropdown to switch<br>Click to add a landmark</div>
+    </div>
+    <div style="border:1px solid #94a3b8;border-radius:4px;padding:6px;background:#fff;">
+      <div style="font-weight:600;font-size:11px;">Right: MSI thumbnail (Plasma)</div>
+      <div style="color:#64748b;font-size:11px;">Compound dropdown<br>“TIC (synthetic)” may appear at the top</div>
+    </div>
+  </div>
+  <div style="margin-top:6px;border:1px dashed #cbd5e1;border-radius:4px;padding:6px;background:#fafafa;">
+    <div style="font-weight:600;font-size:11px;">Bottom: MSI pixel size / Manual / Solve</div>
+    <div style="color:#64748b;font-size:11px;">μm/px · Flip · Scale · Rotate · Offset X/Y</div>
+  </div>
+</div>
+
+### 5-1. MSI selector
+
+- The compound dropdown switches the MSI thumbnail.
+- **TIC (synthetic)** appears at the top whenever a section has many MRM transitions but no real `MSI_TIC` layer. It sums the luminance of every MSI series — handy as a high-contrast landmark target.
+- All MSI thumbnails are tinted with the **Plasma colormap**, so signal regions are far easier to see than raw grayscale.
+
+### 5-2. MSI pixel size
+
+Enter `X / Y` in μm/px. This drives both the ROI physical scale and the **scale bar** drawn on the bottom-left of the main canvas. DESI typically has square pixels (X == Y), so a single value is enough.
+
+### 5-3. Manual section (live sliders)
+
+| Control | Range | Effect |
+|---|---|---|
+| Flip Horizontal / Vertical | checkbox | Mirror HE left-right or top-bottom |
+| Scale | 5–500 % | Resize HE |
+| Rotate | -180°–180° | Rotate HE |
+| Offset X / Y | -2000–2000 px | Translate HE |
+
+Both the slider and the numeric input edit the same value. The Section panel behind the modal previews the result live, so you can fine-tune while watching the overlay.
+
+### 5-4. Landmark mode
+
+Click ≥ 3 corresponding points on each thumbnail, then **`Solve`** runs a complex-LSE similarity transform (rotation + isotropic scale + translation) and pushes the result into the Manual sliders.
+
+| Button | Action |
+|---|---|
+| `Reset to identity` | Reset all Manual fields |
+| `Clear all` | Remove every landmark on both sides |
+| `Solve` | Estimate the affine and populate Manual |
+
+### 5-5. Cancel / Save
+
+- **Cancel**: Restore the snapshot taken when the modal opened (preview rolls back).
+- **Save**: Write the current values into `sec.meta.world_coords.T_he_to_msi` and `msi_um_per_px`, persist to IndexedDB, and refresh the ROI physical scale.
+
+> After Save, the main canvas renders **HE underneath, MSI on top (additive blend)** with a **scale bar** at the bottom-left. The bar auto-picks a round value (10 / 20 / 50 / 100 / 200 / 500 μm; 1 / 2 / 5 / 10 mm) and **shrinks the unit when you zoom in**.
+
+---
+
+## 6. Per-layer display settings (gear ⚙)
+
+Click the **gear ⚙** at the right edge of any layer chip to open a per-layer popover. Clicking the layer thumbnail opens a similar but slightly smaller version.
+
+<div style="border:1px solid #cbd5e1;border-radius:6px;padding:10px;background:#fff;margin:10px 0;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+  <div style="border:1px solid #94a3b8;border-radius:4px;padding:8px;background:#f8fafc;">
+    <div style="font-weight:600;color:#0f172a;margin-bottom:4px;">MSI layer</div>
+    <ul style="margin:4px 0 0 1.2em;padding:0;color:#475569;font-size:11px;line-height:1.6;">
+      <li><b>Apply opacity</b> ✓ (default ON)</li>
+      <li>Opacity (0–100%)</li>
+      <li>Intensity range (vmin / vmax)</li>
+    </ul>
+  </div>
+  <div style="border:1px solid #2563eb;border-radius:4px;padding:8px;background:#eff6ff;">
+    <div style="font-weight:600;color:#1d4ed8;margin-bottom:4px;">HE / IF layer</div>
+    <ul style="margin:4px 0 0 1.2em;padding:0;color:#475569;font-size:11px;line-height:1.6;">
+      <li><b>Apply opacity</b> ☐ (default OFF — always opaque)</li>
+      <li>Opacity (greyed out while OFF)</li>
+      <li><b>Grayscale</b></li>
+    </ul>
+  </div>
+</div>
+
+### 6-1. Apply opacity
+
+- **Checked**: The Opacity slider value is applied to rendering.
+- **Unchecked**: The slider value is ignored — the layer always renders at 100 %. The slider is still visible but disabled.
+- **Defaults**: HE/IF off, MSI on. As a result HE stays as a solid backdrop while only MSI fades out when its opacity drops.
+- Persisted in `sec.meta.layerDisplay[key].applyOpacity`, so the choice survives reloads.
+
+> The toolbar Opacity input also follows this flag. With the active MSI's Apply opacity set to OFF, the toolbar input greys out and a tooltip explains why.
+
+### 6-2. Grayscale (HE/IF only)
+
+- Renders the histology layer in monochrome, perfect for letting MSI's Plasma overlay pop at maximum contrast.
+- BT.601 luma collapses RGB into a single channel; alpha is preserved.
+- Persisted in `sec.meta.layerDisplay[key].grayscale`.
+
+### 6-3. Layer draw order (HE → others → MSI)
+
+The main canvas always paints **HE/IF first, then anything else, then MSI on top with additive (`lighter`) blending**. The order does NOT depend on the order in which layers were toggled — HE never covers MSI.
+
+---
+
+## 7. Drawing ROIs
 
 1. Click a section panel to make it active
 2. Click `+ 新規` in ROI LIST (drawing mode ON)
@@ -107,7 +215,7 @@ Click `+ draw` on an existing ROI row to extend it onto another section.
 
 ---
 
-## 6. Filling in the Memo
+## 8. Filling in the Memo
 
 The Memo panel at the bottom right of the viewer:
 
@@ -127,7 +235,7 @@ Values auto-save to IndexedDB (~400 ms debounce). On Publish they're also writte
 
 ---
 
-## 7. Publish to share
+## 9. Publish to share
 
 The header's `Publish to share` button:
 
@@ -153,7 +261,7 @@ Pressing `Publish`:
 
 ---
 
-## 8. Sharing the URL & passwords
+## 10. Sharing the URL & passwords
 
 - URL: `https://.../viewer/index.html#share=<slug>`
 - Send the viewer password on a **separate channel** (Slack, e-mail)
@@ -163,7 +271,7 @@ Pressing `Publish`:
 
 ---
 
-## 9. What happens on re-publish
+## 11. What happens on re-publish
 
 ★ Important: **publishing the same slug a second time fully overwrites the server-side project.**
 
@@ -184,7 +292,7 @@ Caveats:
 
 ---
 
-## 10. Upload progress / large files
+## 12. Upload progress / large files
 
 Already implemented:
 
@@ -200,7 +308,7 @@ Tips for large (~1.5 GB) projects:
 
 ---
 
-## 11. Storage capacity
+## 13. Storage capacity
 
 | Plan | Storage | Bandwidth | Monthly |
 | --- | --- | --- | --- |
@@ -213,7 +321,7 @@ Per-file size cap defaults to 50 MB on both plans, raisable to 5 GB from the das
 
 ---
 
-## 12. Troubleshooting
+## 14. Troubleshooting
 
 | Symptom | Action |
 | --- | --- |

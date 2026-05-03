@@ -15,7 +15,7 @@ Master-side operations (creating projects, registering layers, publishing, etc.)
 4. [Showing and adding ROIs](#4-showing-and-adding-rois)
 5. [View modes: Free vs Compound](#5-view-modes-free-vs-compound)
 6. [Method (MRM) and switching compounds](#6-method-mrm-and-switching-compounds)
-7. [Range / Opacity / Rotation tweaks](#7-range--opacity--rotation-tweaks)
+7. [Range / Opacity / Rotation tweaks](#7-range--opacity--rotation-tweaks) / [Per-layer settings (gear ⚙)](#7-bis-per-layer-display-settings-gear-) / [MSI scale bar](#7-tris-msi-scale-bar)
 8. [Editing the Memo](#8-editing-the-memo)
 9. [Export ZIP for local download](#9-export-zip-for-local-download)
 10. [What gets saved vs discarded](#10-what-gets-saved-vs-discarded)
@@ -244,14 +244,65 @@ Three groups in each section's toolbar:
 | Field | Input | Meaning |
 | --- | --- | --- |
 | **Range** | min — max | Intensity window of the active MSI layer (display floor / ceiling) |
-| **Opacity** | 0–100 % | Layer transparency |
+| **Opacity** | 0–100 % | Transparency of the active MSI layer |
 | **Rotation** | -180°–180° | Whole-canvas rotation (combines with pan and zoom) |
 
 The **🔗** icon on each field syncs that value across every section. The **`↻`** button resets translate / rotate / zoom for the panel.
 
+> If the Opacity input is greyed out, the active MSI layer has **Apply opacity** disabled in its gear ⚙ popover. Re-enable the checkbox there and the toolbar input becomes editable again.
+
 > These tweaks are **temporary** — they revert to the server state on reload, and other viewers don't see them.
 
 > Pan: drag without modifier. Zoom: mouse wheel. Rotation: the input field, optionally synced with 🔗.
+
+---
+
+## 7-bis. Per-layer display settings (gear ⚙)
+
+Click the **gear ⚙** at the right edge of any layer chip to open a per-layer popover. Clicking the layer thumbnail opens a similar smaller version.
+
+<div style="border:1px solid #cbd5e1;border-radius:6px;padding:10px;background:#fff;margin:10px 0;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+  <div style="border:1px solid #94a3b8;border-radius:4px;padding:8px;background:#f8fafc;">
+    <div style="font-weight:600;color:#0f172a;margin-bottom:4px;">MSI layer</div>
+    <ul style="margin:4px 0 0 1.2em;padding:0;color:#475569;font-size:11px;line-height:1.6;">
+      <li><b>Apply opacity</b> ✓ (default ON)</li>
+      <li>Opacity (0–100%)</li>
+      <li>Intensity range (vmin / vmax)</li>
+    </ul>
+  </div>
+  <div style="border:1px solid #2563eb;border-radius:4px;padding:8px;background:#eff6ff;">
+    <div style="font-weight:600;color:#1d4ed8;margin-bottom:4px;">HE / IF layer</div>
+    <ul style="margin:4px 0 0 1.2em;padding:0;color:#475569;font-size:11px;line-height:1.6;">
+      <li><b>Apply opacity</b> ☐ (default OFF — always opaque)</li>
+      <li>Opacity (greyed out while OFF)</li>
+      <li><b>Grayscale</b></li>
+    </ul>
+  </div>
+</div>
+
+| Field | Effect |
+| --- | --- |
+| **Apply opacity** | When unchecked, the Opacity slider is ignored and the layer always renders at 100 %. HE/IF defaults to OFF so the histology stays as a solid backdrop; MSI defaults to ON to match the previous behaviour. |
+| **Grayscale** (HE/IF only) | Render the histology as monochrome — useful when you want MSI's Plasma overlay to pop at maximum contrast. |
+| **Intensity range** (MSI only) | The MSI intensity window (vmin / vmax). Linked to the Range input on the toolbar. |
+
+> The draw order is fixed: **HE/IF → others → MSI (additive blend)**. No matter the order layers were toggled, the MSI heatmap always sits on top of HE.
+
+> All settings here persist across reloads (stored under `sec.meta.layerDisplay`).
+
+---
+
+## 7-tris. MSI scale bar
+
+When an MSI layer is visible AND the publisher has set **MSI pixel size (μm/px)**, the main canvas shows a **scale bar at the bottom-left**.
+
+<div style="display:inline-block;background:rgba(255,255,255,0.88);padding:4px 8px;border-radius:4px;font-size:11px;font-weight:600;color:#0f172a;box-shadow:0 1px 3px rgba(0,0,0,0.25);margin:6px 0;">
+  <span style="display:inline-block;height:4px;width:80px;background:#0f172a;box-shadow:0 0 0 1px #fff;vertical-align:middle;margin-right:6px;"></span>200 μm
+</div>
+
+- The unit shrinks as you zoom in (e.g. 500 μm → 200 μm → 100 μm) and grows as you zoom out (100 μm → 500 μm → 1 mm).
+- Pan (drag) and Rotation never move the bar — it stays anchored to the bottom-left of the panel.
+- The bar is hidden on sections with no MSI layer or where the publisher hasn't set a pixel size.
 
 ---
 

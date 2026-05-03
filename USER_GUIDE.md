@@ -15,7 +15,7 @@
 4. [ROI の表示と追加](#4-roi-の表示と追加)
 5. [View モード: Free と Compound の使い分け](#5-view-モード-free-と-compound-の使い分け)
 6. [Method (MRM) と化合物の切替](#6-method-mrm-と化合物の切替)
-7. [Range / Opacity / Rotation の調整](#7-range--opacity--rotation-の調整)
+7. [Range / Opacity / Rotation の調整](#7-range--opacity--rotation-の調整) / [レイヤー個別設定 (歯車 ⚙)](#7-bis-レイヤー個別の表示設定-歯車-) / [MSI スケールバー](#7-tris-msi-スケールバー)
 8. [Memo の編集](#8-memo-の編集)
 9. [Export ZIP で手元に保存](#9-export-zip-で手元に保存)
 10. [保存されること・破棄されること](#10-保存されること破棄されること)
@@ -244,14 +244,65 @@
 | 項目 | 入力 | 意味 |
 | --- | --- | --- |
 | **Range** | min — max | アクティブ MSI レイヤーの **強度値レンジ**。表示する輝度の上下限 |
-| **Opacity** | 0–100 % | レイヤーの **不透明度** |
+| **Opacity** | 0–100 % | アクティブ MSI レイヤーの **不透明度** |
 | **Rotation** | -180°〜180° | キャンバス全体の **回転角** (パン・ズームと組み合わせ) |
 
 各項目右の **🔗** で全切片に値を同期できます。**`↻`** ボタンは translate / rotate / zoom (パン位置・回転・倍率) のリセット。
 
+> Opacity 入力がグレーアウトしているときは、そのアクティブ MSI レイヤーの **Apply opacity が OFF** になっています(歯車 ⚙ 内の設定)。チェックを入れ直せばツールバー側も再び編集可能になります。
+
 > これらの調整は **一時的** で、再ロードするとサーバ側の状態に戻ります。他の閲覧者にも反映されません。
 
 > パン: ドラッグ (修飾キーなし) / ズーム: マウスホイール / 回転: Rotation 入力か、ヘッダの 🔗 で他切片と同期。
+
+---
+
+## 7-bis. レイヤー個別の表示設定 (歯車 ⚙)
+
+各レイヤーチップ右端の **歯車 ⚙** をクリックすると、そのレイヤー専用のポップオーバーが開きます。サムネイル画像クリックでも近い設定が出ます。
+
+<div style="border:1px solid #cbd5e1;border-radius:6px;padding:10px;background:#fff;margin:10px 0;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+  <div style="border:1px solid #94a3b8;border-radius:4px;padding:8px;background:#f8fafc;">
+    <div style="font-weight:600;color:#0f172a;margin-bottom:4px;">MSI レイヤー</div>
+    <ul style="margin:4px 0 0 1.2em;padding:0;color:#475569;font-size:11px;line-height:1.6;">
+      <li><b>Apply opacity</b> ✓ (既定 ON)</li>
+      <li>Opacity (0–100%)</li>
+      <li>Intensity range (vmin / vmax)</li>
+    </ul>
+  </div>
+  <div style="border:1px solid #2563eb;border-radius:4px;padding:8px;background:#eff6ff;">
+    <div style="font-weight:600;color:#1d4ed8;margin-bottom:4px;">HE / IF レイヤー</div>
+    <ul style="margin:4px 0 0 1.2em;padding:0;color:#475569;font-size:11px;line-height:1.6;">
+      <li><b>Apply opacity</b> ☐ (既定 OFF — 常時不透明)</li>
+      <li>Opacity (チェック OFF 時はグレーアウト)</li>
+      <li><b>Grayscale (モノクロ表示)</b></li>
+    </ul>
+  </div>
+</div>
+
+| 項目 | 効果 |
+| --- | --- |
+| **Apply opacity** | チェック OFF で Opacity スライダーの値を無視して常時 100% で描画。HE/IF は既定 OFF なので、HE は常に不透明な下地として残ります。MSI は既定 ON で従来動作。 |
+| **Grayscale** (HE/IF のみ) | HE/IF をモノクロ化。MSI の Plasma 色を最大コントラストで見たいときに ON にする。 |
+| **Intensity range** (MSI のみ) | MSI 信号の強度ウィンドウ (vmin / vmax)。ツールバーの Range と連動。 |
+
+> 描画順は **HE/IF → その他 → MSI(加算合成)** に固定されています。HE がレイヤーパネルで何番目に並んでいても、MSI ヒートマップが必ず HE の上に乗って見えます。
+
+> 設定変更は再ロード後も保持されます(`sec.meta.layerDisplay` に永続化)。
+
+---
+
+## 7-tris. MSI スケールバー
+
+MSI レイヤーが表示されていて、提供者側で **MSI pixel size (μm/px)** が設定されている切片では、メイン canvas の **左下にスケールバー** が出ます。
+
+<div style="display:inline-block;background:rgba(255,255,255,0.88);padding:4px 8px;border-radius:4px;font-size:11px;font-weight:600;color:#0f172a;box-shadow:0 1px 3px rgba(0,0,0,0.25);margin:6px 0;">
+  <span style="display:inline-block;height:4px;width:80px;background:#0f172a;box-shadow:0 0 0 1px #fff;vertical-align:middle;margin-right:6px;"></span>200 μm
+</div>
+
+- マウスホイールで拡大すると刻みが細かくなり (例: 500 μm → 200 μm → 100 μm)、縮小で粗く (100 μm → 500 μm → 1 mm) 自動切替されます。
+- パン (ドラッグ) や Rotation で画面が回っても **バーは画面左下に固定** で表示されます。
+- MSI レイヤーが OFF の切片や、提供者が pixel size を未設定のままの切片では非表示になります。
 
 ---
 
