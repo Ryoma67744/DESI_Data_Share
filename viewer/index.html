@@ -153,6 +153,19 @@ body.splitting-v { cursor:row-resize !important; }
 .section-panel .viewer-rot { position:absolute; inset:0; transform-origin:50% 50%; transform: translate(var(--vt-tx, 0px), var(--vt-ty, 0px)) rotate(calc(var(--vt-rot, 0deg) - 90deg)) scale(var(--vt-scale, 1)); will-change:transform; }
 .section-panel canvas.disp { position:absolute; }
 .section-panel canvas.roi { position:absolute; pointer-events:none; }
+.section-panel .msi-scalebar {
+    position:absolute; left:12px; bottom:10px; z-index:5;
+    pointer-events:none;
+    background:rgba(255,255,255,0.88);
+    padding:4px 8px; border-radius:4px;
+    font-size:11px; font-weight:600; color:#0f172a;
+    display:flex; align-items:center; gap:6px;
+    box-shadow:0 1px 3px rgba(0,0,0,0.25);
+}
+.section-panel .msi-scalebar .bar {
+    display:inline-block; height:4px; background:#0f172a; box-shadow:0 0 0 1px #fff;
+}
+.section-panel .msi-scalebar .label { white-space:nowrap; }
 .section-panel .layer-bar { padding:4px 6px 0 6px; border-top:1px solid #f1f5f9; display:flex; flex-direction:column; gap:4px; }
 .section-panel .layer-file-group { border:1px solid #e5e7eb; border-radius:4px; padding:2px 4px; }
 .section-panel .layer-file-group > summary { cursor:pointer; font-size:11px; color:#334155; display:flex; align-items:center; gap:4px; user-select:none; outline:none; }
@@ -1261,6 +1274,11 @@ class SectionPanel {
         const croi  = document.createElement('canvas'); croi.className  = 'roi';
         rot.appendChild(cdisp); rot.appendChild(croi);
         host.appendChild(rot);
+        const scalebar = document.createElement('div');
+        scalebar.className = 'msi-scalebar';
+        scalebar.style.display = 'none';
+        scalebar.innerHTML = '<span class="bar"></span><span class="label"></span>';
+        host.appendChild(scalebar);
         canvasCell.appendChild(host);
 
         const layerBar = document.createElement('div');
@@ -1274,7 +1292,7 @@ class SectionPanel {
         root.appendChild(thumbsCell);
 
         this.dom = {
-            root, host, rot, cdisp, croi,
+            root, host, rot, cdisp, croi, scalebar,
             canvasCell, thumbsCell, layerBar, thumbs, label,
         };
         this.displayCtx = cdisp.getContext('2d', { willReadFrequently: true });
@@ -1401,8 +1419,10 @@ class SectionPanel {
     async analyzeAndInitSettings() {
         for (const key of Object.keys(this.imageSources)) {
             const img = this.imageSources[key];
+            const persistedDisp = (this.section.meta && this.section.meta.layerDisplay && this.section.meta.layerDisplay[key]) || null;
+            const persistedGray = !!(persistedDisp && persistedDisp.grayscale);
             if (!img || !img.complete || img.naturalWidth === 0) {
-                this.imageSettings[key] = { opacity: 1.0, vmin: 0, vmax: 255, actualMin: 0, actualMax: 255 };
+                this.imageSettings[key] = { opacity: 1.0, vmin: 0, vmax: 255, actualMin: 0, actualMax: 255, grayscale: persistedGray };
                 continue;
             }
             const c = document.createElement('canvas');
@@ -1432,7 +1452,7 @@ class SectionPanel {
             // lumToRaw(NaN) propagates as '—' and the number input drops it.
             if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn > mx) { mn = 0; mx = 255; }
             if (!Number.isFinite(vmax) || vmax <= mn) vmax = mx;
-            this.imageSettings[key] = { opacity: 1.0, vmin: mn, vmax, actualMin: mn, actualMax: mx };
+            this.imageSettings[key] = { opacity: 1.0, vmin: mn, vmax, actualMin: mn, actualMax: mx, grayscale: persistedGray };
         }
     }
 
@@ -1505,11 +1525,19 @@ class SectionPanel {
         // regardless of per-section visibility flags. HE/IF stays under
         // per-section control so users can still toggle the histology overlay.
         const compoundFocus = (App.viewMode === 'compound') ? App.focusCompoundKey : null;
-        const layersToDraw = [];
+        // Force HE/IF below MSI so the additive 'lighter' MSI overlay reads on
+        // top of the histology context (otherwise insertion order leaves HE
+        // covering MSI in source-over mode).
+        const heLikeKeys = [];
+        const msiKeys = [];
+        const others = [];
         for (const key of this.visibleLayers) {
             if (compoundFocus && /^MSI_/i.test(key) && key !== compoundFocus) continue;
-            layersToDraw.push(key);
+            if (/HE_STAIN|IF_STAIN/i.test(key))    heLikeKeys.push(key);
+            else if (/^MSI_/i.test(key))           msiKeys.push(key);
+            else                                   others.push(key);
         }
+        const layersToDraw = [...heLikeKeys, ...others, ...msiKeys];
         if (compoundFocus && this.imageSources[compoundFocus] && !layersToDraw.includes(compoundFocus)) {
             layersToDraw.push(compoundFocus);
         }
@@ -1542,6 +1570,21 @@ class SectionPanel {
                         const c = PLASMA_LUT[Math.round(n * 255)];
                         d[i] = c[0]; d[i+1] = c[1]; d[i+2] = c[2]; d[i+3] = 255;
                     }
+                }
+                tctx.putImageData(data, 0, 0);
+                drawSource = tc;
+            } else if (isHeLike && settings.grayscale) {
+                // BT.601 luma so RGB collapses to a single channel; alpha
+                // preserved so any masked HE areas stay transparent.
+                const tc = document.createElement('canvas');
+                tc.width = img.naturalWidth; tc.height = img.naturalHeight;
+                const tctx = tc.getContext('2d', { willReadFrequently: true });
+                tctx.drawImage(img, 0, 0);
+                const data = tctx.getImageData(0, 0, tc.width, tc.height);
+                const d = data.data;
+                for (let i = 0; i < d.length; i += 4) {
+                    const y = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+                    d[i] = y; d[i+1] = y; d[i+2] = y;
                 }
                 tctx.putImageData(data, 0, 0);
                 drawSource = tc;
@@ -1587,6 +1630,61 @@ class SectionPanel {
         }
         ctx.globalCompositeOperation = 'source-over';
         ctx.globalAlpha = 1.0;
+        this.updateScaleBar();
+    }
+
+    // ---- MSI scale bar -------------------------------------------------------
+    // Visible only when a MSI layer is loaded AND the user has set the MSI
+    // pixel size (μm/px) via the Align modal. Picks a "round" physical length
+    // (10/20/50/100/... μm) such that the on-screen bar lands near 120 px,
+    // re-running every applyViewerTransform / setupCanvasSize so it tracks
+    // pan-zoom and resize.
+    updateScaleBar() {
+        const bar = this.dom && this.dom.scalebar; if (!bar) return;
+        const wc = this.section.meta && this.section.meta.world_coords;
+        const um = wc && wc.msi_um_per_px;
+        const msiKey = Object.keys(this.imageSources).find(k => /^MSI_/i.test(k));
+        const msiImg = msiKey ? this.imageSources[msiKey] : null;
+        if (!um || !Number.isFinite(um.x) || !Number.isFinite(um.y) || !msiImg || !msiImg.naturalWidth) {
+            bar.style.display = 'none';
+            return;
+        }
+        const cdisp = this.dom.cdisp;
+        const cssW = parseFloat(cdisp.style.width) || cdisp.getBoundingClientRect().width;
+        if (!cssW) { bar.style.display = 'none'; return; }
+        // setupCanvasSize sized cdisp.width to MSI naturalHeight (× upscale),
+        // then renderComposite rotates the MSI 90° so cdisp's width direction
+        // covers the MSI's natural-height axis. cssW / msi.naturalHeight is the
+        // number of CSS px per MSI px before user zoom.
+        const vt = this._ensureViewerTransform();
+        const screenPxPerMsiPx = (cssW / msiImg.naturalHeight) * (Number(vt.scale) || 1);
+        const umPerMsiPx = (Number(um.x) + Number(um.y)) / 2;
+        if (!(umPerMsiPx > 0)) { bar.style.display = 'none'; return; }
+        const screenPxPerUm = screenPxPerMsiPx / umPerMsiPx;
+        if (!(screenPxPerUm > 0) || !Number.isFinite(screenPxPerUm)) { bar.style.display = 'none'; return; }
+
+        const NICE = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+        const TARGET = 120;
+        let chosen = NICE[0];
+        let bestDiff = Infinity;
+        for (const u of NICE) {
+            const px = u * screenPxPerUm;
+            if (px < 30 || px > 260) continue;
+            const d = Math.abs(px - TARGET);
+            if (d < bestDiff) { bestDiff = d; chosen = u; }
+        }
+        if (bestDiff === Infinity) {
+            // Out of range — fall back to nearest by absolute pixel length.
+            for (const u of NICE) {
+                const d = Math.abs(u * screenPxPerUm - TARGET);
+                if (d < bestDiff) { bestDiff = d; chosen = u; }
+            }
+        }
+        const widthPx = chosen * screenPxPerUm;
+        const labelText = chosen >= 1000 ? (chosen / 1000) + ' mm' : chosen + ' μm';
+        bar.querySelector('.bar').style.width = widthPx + 'px';
+        bar.querySelector('.label').textContent = labelText;
+        bar.style.display = '';
     }
 
     // ---- ROI drawing on this section ----
@@ -2151,6 +2249,8 @@ class SectionPanel {
         // Toolbar.refreshRotation reads getRotation() back from this panel
         // when this section is active, so we don't write the input directly.
         if (App.activeSectionId === this.section.id) Toolbar.refreshRotation();
+        // Scale bar pixel length tracks vt.scale, so refresh on every zoom.
+        this.updateScaleBar();
     }
 
     // Drag (no modifier) translates the section content; wheel zooms it. ROI
@@ -2362,10 +2462,20 @@ class SectionPanel {
             r.innerHTML = '<div style="color:#475569;margin-bottom:2px;">' + label + '</div>' + html;
             return r;
         };
+        const isHeLike = /HE_STAIN|IF_STAIN/i.test(key);
         const opcRow = mkRow('Opacity (%)', '<input type="number" min="0" max="100" step="1" value="' + Math.round(settings.opacity * 100) + '" class="opc" style="width:100%;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;">');
-        const rangeRow = mkRow('Intensity range (' + settings.actualMin + ' - ' + settings.actualMax + ')',
-            '<div style="display:flex;gap:4px;"><input type="number" value="' + settings.vmin + '" class="vmin" style="flex:1;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;"><input type="number" value="' + settings.vmax + '" class="vmax" style="flex:1;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;"></div>');
-        pop.appendChild(opcRow); pop.appendChild(rangeRow);
+        pop.appendChild(opcRow);
+        if (isHeLike) {
+            const grayRow = mkRow('Display',
+                '<label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;color:#1e293b;">' +
+                    '<input type="checkbox" class="gs"' + (settings.grayscale ? ' checked' : '') + '> Grayscale (モノクロ表示)' +
+                '</label>');
+            pop.appendChild(grayRow);
+        } else {
+            const rangeRow = mkRow('Intensity range (' + settings.actualMin + ' - ' + settings.actualMax + ')',
+                '<div style="display:flex;gap:4px;"><input type="number" value="' + settings.vmin + '" class="vmin" style="flex:1;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;"><input type="number" value="' + settings.vmax + '" class="vmax" style="flex:1;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;font-size:11px;"></div>');
+            pop.appendChild(rangeRow);
+        }
         const close = document.createElement('div');
         close.style.cssText = 'text-align:right;margin-top:4px;';
         close.innerHTML = '<button class="btn" style="padding:2px 8px;font-size:11px;">Close</button>';
@@ -2376,21 +2486,34 @@ class SectionPanel {
         this.layerPopover = pop;
 
         const opc = pop.querySelector('.opc');
-        const vmin = pop.querySelector('.vmin');
-        const vmax = pop.querySelector('.vmax');
         opc.addEventListener('change', () => { settings.opacity = Math.max(0, Math.min(1, (parseInt(opc.value) || 0) / 100)); this.renderComposite(); });
-        vmin.addEventListener('change', () => {
-            let a = parseInt(vmin.value), b = parseInt(vmax.value);
-            if (a >= b) { a = b - 1; vmin.value = a; }
-            settings.vmin = a; this.renderComposite();
-            if (this.msiThumbRefs.has(key)) this.renderMsiThumbnail(key);
-        });
-        vmax.addEventListener('change', () => {
-            let a = parseInt(vmin.value), b = parseInt(vmax.value);
-            if (b <= a) { b = a + 1; vmax.value = b; }
-            settings.vmax = b; this.renderComposite();
-            if (this.msiThumbRefs.has(key)) this.renderMsiThumbnail(key);
-        });
+        if (isHeLike) {
+            const gs = pop.querySelector('.gs');
+            gs.addEventListener('change', () => {
+                settings.grayscale = !!gs.checked;
+                this.section.meta = this.section.meta || {};
+                this.section.meta.layerDisplay = this.section.meta.layerDisplay || {};
+                this.section.meta.layerDisplay[key] = this.section.meta.layerDisplay[key] || {};
+                this.section.meta.layerDisplay[key].grayscale = settings.grayscale;
+                this.renderComposite();
+                if (App && App.queueSave) App.queueSave();
+            });
+        } else {
+            const vmin = pop.querySelector('.vmin');
+            const vmax = pop.querySelector('.vmax');
+            vmin.addEventListener('change', () => {
+                let a = parseInt(vmin.value), b = parseInt(vmax.value);
+                if (a >= b) { a = b - 1; vmin.value = a; }
+                settings.vmin = a; this.renderComposite();
+                if (this.msiThumbRefs.has(key)) this.renderMsiThumbnail(key);
+            });
+            vmax.addEventListener('change', () => {
+                let a = parseInt(vmin.value), b = parseInt(vmax.value);
+                if (b <= a) { b = a + 1; vmax.value = b; }
+                settings.vmax = b; this.renderComposite();
+                if (this.msiThumbRefs.has(key)) this.renderMsiThumbnail(key);
+            });
+        }
     }
 
     // ---- Thumbnails ----
