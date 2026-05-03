@@ -3442,14 +3442,31 @@ const Wizards = {
         state.msi_um_x = Number.isFinite(msiUm.x) ? msiUm.x : 50;
         state.msi_um_y = Number.isFinite(msiUm.y) ? msiUm.y : 50;
 
+        // Initial MSI compound for the right-hand thumbnail. Prefer the
+        // section's last-saved choice, then MSI_TIC (typically the cleanest
+        // landmark target), then whichever MSI series happens to be first.
+        const allMsiKeys = Object.keys(sec.msiSeries || {}).filter(k => /^MSI_/i.test(k));
+        const ticKey = allMsiKeys.find(k => /^MSI_TIC$/i.test(k));
+        const persistedMsi = sec.meta && sec.meta.alignmentMsiKey;
+        state.msiKey = (persistedMsi && allMsiKeys.includes(persistedMsi)) ? persistedMsi
+                     : (ticKey || allMsiKeys[0] || null);
+
         // ---- Modal HTML ------------------------------------------------------
         const layerOpts = heKeys.map(k => `<option value="${safe(k)}"${k===state.layerKey?' selected':''}>${safe(k)}</option>`).join('');
+        const msiOpts = allMsiKeys.length
+            ? allMsiKeys.map(k => `<option value="${safe(k)}"${k===state.msiKey?' selected':''}>${safe(formatDisplayName(k))}</option>`).join('')
+            : `<option value="">(MSI なし)</option>`;
         const html = `
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
               <h2 style="margin:0;">HE/IF ⇔ MSI Alignment</h2>
-              <label style="font-size:11px;color:#475569;">
-                Layer: <select data-align-layer style="font-size:11px;padding:2px 6px;border:1px solid #cbd5e1;border-radius:3px;">${layerOpts}</select>
-              </label>
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <label style="font-size:11px;color:#475569;">
+                  Layer: <select data-align-layer style="font-size:11px;padding:2px 6px;border:1px solid #cbd5e1;border-radius:3px;">${layerOpts}</select>
+                </label>
+                <label style="font-size:11px;color:#475569;">
+                  MSI: <select data-align-msi ${allMsiKeys.length ? '' : 'disabled'} style="font-size:11px;padding:2px 6px;border:1px solid #cbd5e1;border-radius:3px;">${msiOpts}</select>
+                </label>
+              </div>
             </div>
             <p style="font-size:11px;color:#475569;margin-top:0;">
               スライダーまたは対応点クリックで HE/IF を MSI に重ねます。背後の Section パネルでリアルタイムにプレビューされます。
@@ -3535,6 +3552,7 @@ const Wizards = {
         // ---- Wire DOM refs ---------------------------------------------------
         const $ = (sel) => card.querySelector(sel);
         const layerSel = $('[data-align-layer]');
+        const msiSel   = $('[data-align-msi]');
         const flipLrEl = $('[data-flip-lr]');
         const flipUdEl = $('[data-flip-ud]');
         const scaleEl  = $('[data-scale]');
@@ -3568,6 +3586,7 @@ const Wizards = {
             sec.meta.world_coords = sec.meta.world_coords || {};
             sec.meta.world_coords.T_he_to_msi = buildHeToMsiAffine(state);
             sec.meta.world_coords.msi_um_per_px = { x: state.msi_um_x, y: state.msi_um_y };
+            if (state.msiKey) sec.meta.alignmentMsiKey = state.msiKey;
         };
         const updatePreview = () => {
             writeWorldCoords();
@@ -3627,10 +3646,36 @@ const Wizards = {
                 offx: state.offx, offy: state.offy,
                 landmarks: { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() },
             };
+            const savedMsiKey = state.msiKey;
             const ns = loadStateFor(next);
             Object.assign(state, ns);
+            // Keep the user's MSI selection across HE switches (MSI is independent).
+            state.msiKey = savedMsiKey;
             syncUiFromState();
             updatePreview();
+            populateThumbs();
+            renderLandmarks();
+        });
+
+        // ---- MSI dropdown ---------------------------------------------------
+        if (msiSel) msiSel.addEventListener('change', () => {
+            const next = msiSel.value;
+            if (!next || !(sec.msiSeries && sec.msiSeries[next])) return;
+            // Warn if dimensions differ AND there are MSI landmarks already.
+            const oldImg = panel.imageSources && panel.imageSources[state.msiKey];
+            const newImg = panel.imageSources && panel.imageSources[next];
+            const dimsDiffer = oldImg && newImg
+                && (oldImg.naturalWidth  !== newImg.naturalWidth
+                 || oldImg.naturalHeight !== newImg.naturalHeight);
+            if (state.landmarks.msi.length > 0 && dimsDiffer) {
+                const ok = confirm('MSI 画像の寸法が異なるため既存の MSI ランドマーク '
+                                 + state.landmarks.msi.length + ' 件は無効になります。'
+                                 + 'クリアして切り替えますか?');
+                if (!ok) { msiSel.value = state.msiKey; return; }
+                state.landmarks.msi = [];
+            }
+            state.msiKey = next;
+            writeWorldCoords();
             populateThumbs();
             renderLandmarks();
         });
@@ -3652,20 +3697,17 @@ const Wizards = {
                     }
                 }
             }
-            // MSI: use the first available MSI series source
-            const msiKeys = Object.keys(sec.msiSeries || {}).filter(k => /^MSI_/i.test(k));
-            const msiKey = msiKeys[0];
-            const msiEnt = msiKey ? sec.msiSeries[msiKey] : null;
+            // MSI: render whichever compound the user (or persisted state) picked.
+            // panel.imageSources[key] is the decoded PNG <img> for each MSI series
+            // and is populated at SectionPanel.loadAllLayers time, so swapping is
+            // just a src reassignment — no I/O.
+            const msiKey = state.msiKey;
+            if (!msiKey) { msiImg.removeAttribute('src'); return; }
+            const msiEnt = sec.msiSeries[msiKey];
             if (msiEnt && msiEnt.blobId) {
-                // We need a thumbnail of the MSI raster. For simplicity, reuse the
-                // existing imageSources cache if loaded; otherwise we point at the
-                // raw blob (xlsx/txt won't render — fall back to a placeholder).
                 const cached = panel.imageSources && panel.imageSources[msiKey];
-                if (cached && cached.src) {
-                    msiImg.src = cached.src;
-                } else {
-                    // unknown — leave dark
-                }
+                if (cached && cached.src) msiImg.src = cached.src;
+                else msiImg.removeAttribute('src');
             }
         };
         await populateThumbs();
