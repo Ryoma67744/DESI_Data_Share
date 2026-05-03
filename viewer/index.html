@@ -3446,15 +3446,28 @@ const Wizards = {
         // section's last-saved choice, then MSI_TIC (typically the cleanest
         // landmark target), then whichever MSI series happens to be first.
         const allMsiKeys = Object.keys(sec.msiSeries || {}).filter(k => /^MSI_/i.test(k));
-        const ticKey = allMsiKeys.find(k => /^MSI_TIC$/i.test(k));
+        const realTicKey = allMsiKeys.find(k => /^MSI_TIC$/i.test(k));
+        // Synthetic TIC is offered when the user has 2+ MSI series and no real
+        // MSI_TIC is registered. The synthetic image is just the per-pixel sum
+        // of all MSI series intensities — useful for landmark picking on
+        // multi-MRM lipidomics data where TIC is never an explicit channel.
+        const offerSyntheticTic = allMsiKeys.length >= 2 && !realTicKey;
+        const candidateMsiKeys = offerSyntheticTic ? ['__TIC__', ...allMsiKeys] : allMsiKeys;
         const persistedMsi = sec.meta && sec.meta.alignmentMsiKey;
-        state.msiKey = (persistedMsi && allMsiKeys.includes(persistedMsi)) ? persistedMsi
-                     : (ticKey || allMsiKeys[0] || null);
+        state.msiKey = (persistedMsi && candidateMsiKeys.includes(persistedMsi)) ? persistedMsi
+                     : (realTicKey
+                        || (offerSyntheticTic ? '__TIC__' : null)
+                        || allMsiKeys[0]
+                        || null);
 
         // ---- Modal HTML ------------------------------------------------------
         const layerOpts = heKeys.map(k => `<option value="${safe(k)}"${k===state.layerKey?' selected':''}>${safe(k)}</option>`).join('');
-        const msiOpts = allMsiKeys.length
-            ? allMsiKeys.map(k => `<option value="${safe(k)}"${k===state.msiKey?' selected':''}>${safe(formatDisplayName(k))}</option>`).join('')
+        const realMsiOpts = allMsiKeys.map(k => `<option value="${safe(k)}"${k===state.msiKey?' selected':''}>${safe(formatDisplayName(k))}</option>`).join('');
+        const ticMsiOpt = offerSyntheticTic
+            ? `<option value="__TIC__"${state.msiKey==='__TIC__'?' selected':''}>TIC (合成)</option>`
+            : '';
+        const msiOpts = (allMsiKeys.length || offerSyntheticTic)
+            ? (ticMsiOpt + realMsiOpts)
             : `<option value="">(MSI なし)</option>`;
         const html = `
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
@@ -3464,7 +3477,7 @@ const Wizards = {
                   Layer: <select data-align-layer style="font-size:11px;padding:2px 6px;border:1px solid #cbd5e1;border-radius:3px;">${layerOpts}</select>
                 </label>
                 <label style="font-size:11px;color:#475569;">
-                  MSI: <select data-align-msi ${allMsiKeys.length ? '' : 'disabled'} style="font-size:11px;padding:2px 6px;border:1px solid #cbd5e1;border-radius:3px;">${msiOpts}</select>
+                  MSI: <select data-align-msi ${(allMsiKeys.length || offerSyntheticTic) ? '' : 'disabled'} style="font-size:11px;padding:2px 6px;border:1px solid #cbd5e1;border-radius:3px;">${msiOpts}</select>
                 </label>
               </div>
             </div>
@@ -3497,19 +3510,19 @@ const Wizards = {
 
                 <span>Scale</span>
                 <input type="range" data-scale min="5" max="500" step="0.1" value="${state.scale_pct}">
-                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-scale-num step="0.1" min="0.1" value="${state.scale_pct}" style="width:60px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> %</span>
+                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-scale-num step="0.1" min="0.1" value="${state.scale_pct}" style="width:60px;flex-shrink:0;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> %</span>
 
                 <span>Rotate</span>
                 <input type="range" data-rotate min="-180" max="180" step="0.1" value="${state.rotate_deg}">
-                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-rotate-num step="0.1" min="-180" max="180" value="${state.rotate_deg}" style="width:60px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> °</span>
+                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-rotate-num step="0.1" min="-180" max="180" value="${state.rotate_deg}" style="width:60px;flex-shrink:0;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> °</span>
 
                 <span>Offset X</span>
                 <input type="range" data-offx min="-2000" max="2000" step="0.5" value="${state.offx}">
-                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-offx-num step="0.5" value="${state.offx}" style="width:54px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> px</span>
+                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-offx-num step="0.5" value="${state.offx}" style="width:54px;flex-shrink:0;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> px</span>
 
                 <span>Offset Y</span>
                 <input type="range" data-offy min="-2000" max="2000" step="0.5" value="${state.offy}">
-                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-offy-num step="0.5" value="${state.offy}" style="width:54px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> px</span>
+                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end;"><input type="number" data-offy-num step="0.5" value="${state.offy}" style="width:54px;flex-shrink:0;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;text-align:right;"> px</span>
               </div>
             </fieldset>
 
@@ -3660,11 +3673,21 @@ const Wizards = {
         // ---- MSI dropdown ---------------------------------------------------
         if (msiSel) msiSel.addEventListener('change', () => {
             const next = msiSel.value;
-            if (!next || !(sec.msiSeries && sec.msiSeries[next])) return;
-            // Warn if dimensions differ AND there are MSI landmarks already.
-            const oldImg = panel.imageSources && panel.imageSources[state.msiKey];
-            const newImg = panel.imageSources && panel.imageSources[next];
+            // Accept either a real MSI series key or the synthetic '__TIC__'.
+            const isValid = next === '__TIC__'
+                ? offerSyntheticTic
+                : !!(sec.msiSeries && sec.msiSeries[next]);
+            if (!next || !isValid) return;
+            // Resolve a representative <img> for either real or synthetic keys
+            // so the dimension-mismatch warning still fires correctly.
+            const refForDims = (k) => {
+                if (k === '__TIC__') return computeSyntheticTic();
+                return panel.imageSources && panel.imageSources[k];
+            };
+            const oldImg = refForDims(state.msiKey);
+            const newImg = refForDims(next);
             const dimsDiffer = oldImg && newImg
+                && oldImg.naturalWidth && newImg.naturalWidth
                 && (oldImg.naturalWidth  !== newImg.naturalWidth
                  || oldImg.naturalHeight !== newImg.naturalHeight);
             if (state.landmarks.msi.length > 0 && dimsDiffer) {
@@ -3679,6 +3702,99 @@ const Wizards = {
             populateThumbs();
             renderLandmarks();
         });
+
+        // ---- MSI colour mapping (Plasma) + synthetic TIC --------------------
+        // Apply Plasma colormap to a grayscale MSI <img>. Mirrors the algorithm
+        // used by SectionPanel.renderMsiThumbnail (line 2548-2569). vmin/vmax
+        // are in 0..255 luminance units (after MSI series have been
+        // grayscale-rasterised by rasterRowsToPngDataUrl).
+        const paintMsiToColored = (srcImg, vmin, vmax) => {
+            if (!srcImg || !srcImg.complete || !srcImg.naturalWidth) return null;
+            const c = document.createElement('canvas');
+            c.width = srcImg.naturalWidth; c.height = srcImg.naturalHeight;
+            const cctx = c.getContext('2d', { willReadFrequently: true });
+            cctx.drawImage(srcImg, 0, 0);
+            const data = cctx.getImageData(0, 0, c.width, c.height);
+            const d = data.data;
+            const v0 = Number.isFinite(vmin) ? vmin : 0;
+            const v1 = Number.isFinite(vmax) && vmax > v0 ? vmax : v0 + 1;
+            const range = v1 - v0;
+            for (let i = 0; i < d.length; i += 4) {
+                if (d[i+3] === 0) continue;
+                const lum = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+                if (lum < 1) { d[i] = 0; d[i+1] = 0; d[i+2] = 0; continue; }
+                const n = Math.max(0, Math.min(1, (lum - v0) / range));
+                const cm = PLASMA_LUT[Math.round(n * 255)];
+                d[i] = cm[0]; d[i+1] = cm[1]; d[i+2] = cm[2];
+            }
+            cctx.putImageData(data, 0, 0);
+            return c.toDataURL('image/png');
+        };
+
+        // Sum every MSI series' grayscale luminance into one image. Caller gets
+        // an <img> backed by a fresh dataURL; downstream paintMsiToColored
+        // re-applies Plasma like for any other MSI thumbnail. Skips any series
+        // whose dimensions don't match the modal's chosen reference size.
+        let syntheticTicImg = null;
+        const computeSyntheticTic = () => {
+            if (syntheticTicImg) return syntheticTicImg;
+            const dims = new Map();
+            const usable = [];
+            for (const k of allMsiKeys) {
+                const img = panel.imageSources && panel.imageSources[k];
+                if (!img || !img.complete || !img.naturalWidth) continue;
+                const dk = img.naturalWidth + 'x' + img.naturalHeight;
+                dims.set(dk, (dims.get(dk) || 0) + 1);
+                usable.push({ k, img, dk });
+            }
+            if (!usable.length) return null;
+            let bestDim = null, bestN = 0;
+            for (const [dk, n] of dims) if (n > bestN) { bestDim = dk; bestN = n; }
+            const [W, H] = bestDim.split('x').map(Number);
+            const acc = new Float32Array(W * H);
+            const tmp = document.createElement('canvas');
+            tmp.width = W; tmp.height = H;
+            const tctx = tmp.getContext('2d', { willReadFrequently: true });
+            let added = 0;
+            for (const { k, img, dk } of usable) {
+                if (dk !== bestDim) {
+                    console.warn('TIC合成: 寸法不一致でスキップ', k, dk, '!=', bestDim);
+                    continue;
+                }
+                tctx.clearRect(0, 0, W, H);
+                tctx.drawImage(img, 0, 0);
+                const px = tctx.getImageData(0, 0, W, H).data;
+                for (let i = 0, p = 0; i < acc.length; i++, p += 4) {
+                    if (px[p+3] === 0) continue;
+                    acc[i] += 0.299*px[p] + 0.587*px[p+1] + 0.114*px[p+2];
+                }
+                added++;
+            }
+            if (!added) return null;
+            let mn = Infinity, mx = -Infinity;
+            for (let i = 0; i < acc.length; i++) {
+                if (acc[i] < mn) mn = acc[i];
+                if (acc[i] > mx) mx = acc[i];
+            }
+            if (!(mx > mn)) { mn = 0; mx = 1; }
+            const out = tctx.createImageData(W, H);
+            for (let i = 0, p = 0; i < acc.length; i++, p += 4) {
+                const n = Math.max(0, Math.min(1, (acc[i] - mn) / (mx - mn)));
+                const g = Math.round(n * 255);
+                out.data[p] = out.data[p+1] = out.data[p+2] = g;
+                out.data[p+3] = 255;
+            }
+            tctx.putImageData(out, 0, 0);
+            const grayUrl = tmp.toDataURL('image/png');
+            const im = new Image();
+            im.src = grayUrl;
+            syntheticTicImg = im;
+            return im;
+        };
+
+        // Cache colored dataURLs per MSI key so flipping the dropdown back to a
+        // previously-shown compound is instant (no recompute).
+        const coloredCache = new Map();
 
         // ---- Thumbnails for landmark picking --------------------------------
         const populateThumbs = async () => {
@@ -3697,18 +3813,33 @@ const Wizards = {
                     }
                 }
             }
-            // MSI: render whichever compound the user (or persisted state) picked.
-            // panel.imageSources[key] is the decoded PNG <img> for each MSI series
-            // and is populated at SectionPanel.loadAllLayers time, so swapping is
-            // just a src reassignment — no I/O.
+            // MSI: render whichever compound the user (or persisted state)
+            // picked, painted with Plasma. The synthetic '__TIC__' option sums
+            // all MSI series and goes through the same paint pipeline.
             const msiKey = state.msiKey;
             if (!msiKey) { msiImg.removeAttribute('src'); return; }
-            const msiEnt = sec.msiSeries[msiKey];
-            if (msiEnt && msiEnt.blobId) {
-                const cached = panel.imageSources && panel.imageSources[msiKey];
-                if (cached && cached.src) msiImg.src = cached.src;
-                else msiImg.removeAttribute('src');
+            if (coloredCache.has(msiKey)) {
+                msiImg.src = coloredCache.get(msiKey);
+                return;
             }
+            let srcImg = null, vmin = 0, vmax = 255;
+            if (msiKey === '__TIC__') {
+                srcImg = computeSyntheticTic();
+                // synthetic TIC is already self-normalised to [0,255]
+            } else if (sec.msiSeries[msiKey]) {
+                srcImg = panel.imageSources && panel.imageSources[msiKey];
+                const st = panel.imageSettings && panel.imageSettings[msiKey];
+                if (st && Number.isFinite(st.vmin) && Number.isFinite(st.vmax)) {
+                    vmin = st.vmin; vmax = st.vmax;
+                }
+            }
+            if (!srcImg) { msiImg.removeAttribute('src'); return; }
+            const paintAndSet = () => {
+                const url = paintMsiToColored(srcImg, vmin, vmax);
+                if (url) { coloredCache.set(msiKey, url); msiImg.src = url; }
+            };
+            if (srcImg.complete && srcImg.naturalWidth) paintAndSet();
+            else srcImg.addEventListener('load', paintAndSet, { once: true });
         };
         await populateThumbs();
 
