@@ -2210,6 +2210,18 @@ class SectionPanel {
         return { available: true, value: Math.round((settings.opacity != null ? settings.opacity : 1) * 100) };
     }
 
+    // Section-wide MSI opacity helper. Each MSI layer keeps its own
+    // imageSettings entry, so without propagation the toolbar's Opacity
+    // value snaps back to whatever default the new active layer was
+    // initialised with whenever the user switches compounds. Propagating
+    // a change to every MSI key in this section keeps the slider value
+    // sticky across compound switches.
+    _propagateMsiOpacity(value) {
+        for (const k of Object.keys(this.imageSettings)) {
+            if (/^MSI_/i.test(k)) this.imageSettings[k].opacity = value;
+        }
+    }
+
     applyOpacity(percent) {
         const key = this.effectiveActiveMsiKey();
         const settings = key ? this.imageSettings[key] : null;
@@ -2218,6 +2230,7 @@ class SectionPanel {
         if (!Number.isFinite(v)) v = 100;
         v = Math.max(0, Math.min(100, Math.round(v)));
         settings.opacity = v / 100;
+        if (/^MSI_/i.test(key)) this._propagateMsiOpacity(settings.opacity);
         this.renderComposite();
         App.queueSave();
         App.broadcastSync('opacity', v, this);
@@ -2389,6 +2402,7 @@ class SectionPanel {
             if (!Number.isFinite(v)) v = 100;
             v = Math.max(0, Math.min(100, Math.round(v)));
             settings.opacity = v / 100;
+            if (/^MSI_/i.test(key)) this._propagateMsiOpacity(settings.opacity);
             this.renderComposite();
             App.queueSave();
             if (App.activeSectionId === this.section.id) Toolbar.refreshOpacity();
@@ -2516,8 +2530,10 @@ class SectionPanel {
         opc.addEventListener('input', () => {
             const v = Math.max(0, Math.min(100, parseInt(opc.value) || 0));
             settings.opacity = v / 100;
+            if (/^MSI_/i.test(key)) this._propagateMsiOpacity(settings.opacity);
             opcVal.textContent = v + '%';
             this.renderComposite();
+            if (App.activeSectionId === this.section.id) Toolbar.refreshOpacity();
         });
         apo.addEventListener('change', () => {
             settings.applyOpacity = apo.checked;
@@ -2591,7 +2607,12 @@ class SectionPanel {
             opc.style.opacity = on ? '1' : '0.5';
         };
         syncOpcEnabled();
-        opc.addEventListener('change', () => { settings.opacity = Math.max(0, Math.min(1, (parseInt(opc.value) || 0) / 100)); this.renderComposite(); });
+        opc.addEventListener('change', () => {
+            settings.opacity = Math.max(0, Math.min(1, (parseInt(opc.value) || 0) / 100));
+            if (/^MSI_/i.test(key)) this._propagateMsiOpacity(settings.opacity);
+            this.renderComposite();
+            if (App.activeSectionId === this.section.id) Toolbar.refreshOpacity();
+        });
         apo.addEventListener('change', () => {
             settings.applyOpacity = apo.checked;
             this.section.meta = this.section.meta || {};
