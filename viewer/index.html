@@ -786,7 +786,14 @@ async function decodeJpegInTiffToDataUrl(buf, ifd) {
     const stripByteCounts = ifd.t279;
     if (!stripOffsets || !stripByteCounts || stripOffsets.length === 0) return null;
     if (ifd.t324) return null;        // tiled images need a different layout
-    const W = ifd.width, H = ifd.height;
+    // UTIF.decode() leaves .width / .height undefined; only UTIF.decodeImage()
+    // populates them. This fast path runs before decodeImage(), so fall back to
+    // the raw ImageWidth (t256) / ImageLength (t257) tags.
+    const W = (Number.isFinite(ifd.width)  && ifd.width  > 0) ? ifd.width
+            : (ifd.t256 && ifd.t256[0]) || 0;
+    const H = (Number.isFinite(ifd.height) && ifd.height > 0) ? ifd.height
+            : (ifd.t257 && ifd.t257[0]) || 0;
+    if (!W || !H) return null;        // let the UTIF fallback path handle it
     const rowsPerStrip = (ifd.t278 && ifd.t278.length) ? ifd.t278[0] : H;
     const N = stripOffsets.length;
 
