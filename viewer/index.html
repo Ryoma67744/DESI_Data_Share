@@ -2775,6 +2775,37 @@ class SectionPanel {
                     for (const k of group.keys) this.toggleLayer(k, turnOn);
                 });
                 acts.appendChild(tBtn);
+                const rBtn = document.createElement('button');
+                rBtn.type = 'button';
+                rBtn.textContent = 'rename';
+                rBtn.title = 'Rename this MSI source file';
+                rBtn.style.cssText = 'font-size:10px;padding:1px 5px;border:1px solid #d1d5db;background:#fff;border-radius:3px;cursor:pointer;color:#475569;';
+                rBtn.addEventListener('click', async (ev) => {
+                    ev.preventDefault(); ev.stopPropagation();
+                    const cur = (this.section.msiFiles || {})[fid];
+                    if (!cur) return;
+                    const oldName = cur.filename || '';
+                    const dotIdx = oldName.lastIndexOf('.');
+                    const stem = dotIdx >= 0 ? oldName.slice(0, dotIdx) : oldName;
+                    const ext  = dotIdx >= 0 ? oldName.slice(dotIdx) : '';
+                    const next = prompt('新しいファイル名（拡張子は自動継承）', stem);
+                    if (next == null) return;
+                    const safe = String(next).trim().replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
+                    if (!safe) { showToast('ファイル名が無効です'); return; }
+                    const finalName = safe + ext;
+                    cur.filename = finalName;
+                    for (const [, ent] of Object.entries(this.section.msiSeries || {})) {
+                        if (ent && ent.sourceFileId === fid) ent.filename = finalName;
+                    }
+                    const rec = await ProjectStorage.getBlob(cur.blobId);
+                    if (rec) await ProjectStorage.putBlob({
+                        id: cur.blobId, blob: rec.blob, mime: rec.mime, filename: finalName,
+                    });
+                    this.populateThumbnails();
+                    App.queueSave();
+                    showToast('リネーム: ' + finalName);
+                });
+                acts.appendChild(rBtn);
                 const dBtn = document.createElement('button');
                 dBtn.type = 'button';
                 dBtn.textContent = 'delete file';
@@ -2850,6 +2881,11 @@ class SectionPanel {
 
     async addMsiLayer(key, blob, def, opts) {
         opts = opts || {};
+        const origName = blob.name || '';
+        const dot = origName.lastIndexOf('.');
+        const ext = dot >= 0 ? origName.slice(dot) : (def.kind === 'txt' ? '.txt' : '.xlsx');
+        const safeBase = String(opts.displayBaseName || '').trim().replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
+        const finalName = safeBase ? (safeBase + ext) : (origName || (key + ext));
         let blobId = opts.sharedBlobId || null;
         if (!blobId) {
             blobId = uid('blob');
@@ -2857,12 +2893,12 @@ class SectionPanel {
                 id: blobId,
                 blob,
                 mime: blob.type || 'application/octet-stream',
-                filename: blob.name || (key + (def.kind === 'txt' ? '.txt' : '.xlsx')),
+                filename: finalName,
             });
         }
         const ent = Object.assign({}, def, {
             blobId,
-            filename: blob.name || '',
+            filename: finalName,
             sourceFileId: opts.sourceFileId || null,
             compoundMeta: opts.compoundMeta || null,
         });
@@ -2874,8 +2910,8 @@ class SectionPanel {
             if (!this.section.msiFiles[opts.sourceFileId]) {
                 this.section.msiFiles[opts.sourceFileId] = {
                     id: opts.sourceFileId,
-                    filename: blob.name || '',
-                    kind: def.kind || (/\.xlsx$/i.test(blob.name || '') ? 'xlsx' : 'txt'),
+                    filename: finalName,
+                    kind: def.kind || (/\.xlsx$/i.test(origName) ? 'xlsx' : 'txt'),
                     blobId,
                     registeredAt: nowIso(),
                 };
@@ -4340,6 +4376,9 @@ const Wizards = {
               <label>Source file (.xlsx or .txt)
                 <input type="file" name="src" accept=".xlsx,.xls,.txt" required>
               </label>
+              <label>保存ファイル名（任意・拡張子は自動付与）
+                <input type="text" name="display_name" placeholder="未入力ならアップロードしたファイル名を使用">
+              </label>
               <div data-xlsx-area class="hidden">
                 <label>Sheet
                   <select name="sheet"></select>
@@ -4440,6 +4479,11 @@ const Wizards = {
             err.textContent = '';
             const f = srcInp.files[0];
             if (!f) return;
+            const displayInp = card.querySelector('[name="display_name"]');
+            if (displayInp && !displayInp.value) {
+                const dot = f.name.lastIndexOf('.');
+                displayInp.value = dot > 0 ? f.name.slice(0, dot) : f.name;
+            }
             const isXlsx = /\.(xlsx|xls)$/i.test(f.name);
             kindCache = isXlsx ? 'xlsx' : 'txt';
             xlsxArea.classList.toggle('hidden', !isXlsx);
@@ -4522,6 +4566,7 @@ const Wizards = {
         card._collect = async () => {
             const f = srcInp.files[0];
             if (!f) { err.textContent = 'Source file is required'; return false; }
+            const displayName = (card.querySelector('[name="display_name"]').value || '').trim();
             if (kindCache === 'xlsx') {
                 const sheet = card.querySelector('[name="sheet"]').value;
                 const data_start_row = parseInt(card.querySelector('[name="data_start_row"]').value) || 5;
@@ -4530,7 +4575,7 @@ const Wizards = {
                 const vSel = card.querySelector('[name="col_v_multi"]');
                 const picks = Array.from(vSel.selectedOptions).filter(o => !o.disabled);
                 if (!picks.length) { err.textContent = 'Pick at least one intensity column'; return false; }
-                return { kind: 'xlsx', file: f, picks: picks.map(o => ({ col: o.value, name: o.textContent.split('—')[1].trim() })), sheet, data_start_row, col_x, col_y };
+                return { kind: 'xlsx', file: f, displayName, picks: picks.map(o => ({ col: o.value, name: o.textContent.split('—')[1].trim() })), sheet, data_start_row, col_x, col_y };
             }
             // txt
             if (analyteCache && analyteCache.compounds.length) {
@@ -4545,11 +4590,11 @@ const Wizards = {
                     picks.push({ index: idx, layer });
                 });
                 if (!picks.length) { err.textContent = 'チェックされた化合物がありません'; return false; }
-                return { kind: 'txt-analyte', file: f, picks, dataStartLine: analyteCache.dataStartLine };
+                return { kind: 'txt-analyte', file: f, displayName, picks, dataStartLine: analyteCache.dataStartLine };
             }
             // generic TSV/CSV fallback (header from line 0)
             const baseName = f.name.replace(/\.[^.]+$/, '');
-            return { kind: 'txt-generic', file: f, layer: 'MSI_' + sanitizeCompoundName(baseName) };
+            return { kind: 'txt-generic', file: f, displayName, layer: 'MSI_' + sanitizeCompoundName(baseName) };
         };
 
         // override modal-ok behavior to handle async _collect
@@ -4583,7 +4628,7 @@ const Wizards = {
                             col_x: r.col_x,
                             col_y: r.col_y,
                             col_v: pick.col,
-                        }, { sourceFileId, compoundMeta, sharedBlobId });
+                        }, { sourceFileId, compoundMeta, sharedBlobId, displayBaseName: r.displayName });
                         if (!sharedBlobId) sharedBlobId = panel.section.msiSeries[layerKey].blobId;
                     }
                     showToast('Registered ' + r.picks.length + ' MSI layer(s)');
@@ -4591,22 +4636,24 @@ const Wizards = {
                     const sourceFileId = uid('msifile');
                     let sharedBlobId = null;
                     for (const pick of r.picks) {
-                        const layerKey = 'MSI_' + sanitizeCompoundName(pick.layer.replace(/^MSI_/, ''));
+                        const editedBase = pick.layer.replace(/^MSI_/, '');
+                        const layerKey = 'MSI_' + sanitizeCompoundName(editedBase);
                         const c = (analyteCache && analyteCache.compounds.find(cc => cc.index === pick.index)) || {};
+                        const editedSplit = splitCeCv(editedBase);
                         const compoundMeta = {
-                            name: c.name || pick.layer.replace(/^MSI_/, ''),
-                            base: c.base || splitCeCv(pick.layer.replace(/^MSI_/, '')).base,
+                            name: editedBase,
+                            base: editedSplit.base,
                             precursor: c.precursor != null ? c.precursor : null,
                             product: c.product != null ? c.product : null,
-                            ce: c.ce != null ? c.ce : null,
-                            cv: c.cv != null ? c.cv : null,
+                            ce: editedSplit.ce != null ? editedSplit.ce : (c.ce != null ? c.ce : null),
+                            cv: editedSplit.cv != null ? editedSplit.cv : (c.cv != null ? c.cv : null),
                             sourceFile: r.file.name || '',
                         };
                         await panel.addMsiLayer(layerKey, r.file, {
                             kind: 'txt',
                             compound_index: pick.index,
                             dataStartLine: r.dataStartLine,
-                        }, { sourceFileId, compoundMeta, sharedBlobId });
+                        }, { sourceFileId, compoundMeta, sharedBlobId, displayBaseName: r.displayName });
                         if (!sharedBlobId) sharedBlobId = panel.section.msiSeries[layerKey].blobId;
                     }
                     showToast('Registered ' + r.picks.length + ' MSI layer(s)');
@@ -4622,7 +4669,7 @@ const Wizards = {
                         cv: split.cv,
                         sourceFile: r.file.name || '',
                     };
-                    await panel.addMsiLayer(r.layer, r.file, { kind: 'txt' }, { sourceFileId, compoundMeta });
+                    await panel.addMsiLayer(r.layer, r.file, { kind: 'txt' }, { sourceFileId, compoundMeta, displayBaseName: r.displayName });
                     showToast('Registered: ' + r.layer);
                 }
                 card._close(true);
