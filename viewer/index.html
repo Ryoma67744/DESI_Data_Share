@@ -5138,11 +5138,11 @@ function _readHelpAudience() {
     } catch (e) {}
     // Auto-pick by current viewer mode: share recipients see the recipient
     // guide first; everyone else gets the master/admin sharing guide.
-    return (window.App && window.App.shareMode) ? 'viewer' : 'master';
+    return (typeof App !== 'undefined' && App && App.shareMode) ? 'viewer' : 'master';
 }
 
 async function openHelpModal(audience, lang) {
-    const isShare = !!(window.App && window.App.shareMode);
+    const isShare = !!(typeof App !== 'undefined' && App && App.shareMode);
     if (isShare) {
         // Share recipients only ever see the recipient guide; the manage /
         // admin guides describe master-only operations they can't perform.
