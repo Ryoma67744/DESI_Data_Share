@@ -245,7 +245,8 @@ body.share-mode:not(.share-admin) #method-rows tr > td:nth-child(5),
 body.share-mode:not(.share-admin) #method-rows tr > td:nth-child(6) { display:none !important; }
 /* In share mode, hide the per-file "delete" action regardless of admin
    role — share recipients shouldn't ever delete file groups. */
-body.share-mode .thumb-file-group .file-actions [data-action="delete-file"] { display:none !important; }
+body.share-mode .thumb-file-group .file-actions [data-action="delete-file"],
+body.share-mode .thumb-file-group .file-actions [data-action="rename"] { display:none !important; }
     </style>
 </head>
 <body class="text-gray-800">
@@ -2779,6 +2780,7 @@ class SectionPanel {
                 rBtn.type = 'button';
                 rBtn.textContent = 'rename';
                 rBtn.title = 'Rename this MSI source file';
+                rBtn.dataset.action = 'rename';
                 rBtn.style.cssText = 'font-size:10px;padding:1px 5px;border:1px solid #d1d5db;background:#fff;border-radius:3px;cursor:pointer;color:#475569;';
                 rBtn.addEventListener('click', async (ev) => {
                     ev.preventDefault(); ev.stopPropagation();
