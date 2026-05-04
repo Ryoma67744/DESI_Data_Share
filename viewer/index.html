@@ -5142,10 +5142,17 @@ function _readHelpAudience() {
 }
 
 async function openHelpModal(audience, lang) {
-    audience = (audience === 'manage' || audience === 'master' || audience === 'viewer')
-        ? audience : _readHelpAudience();
+    const isShare = !!(window.App && window.App.shareMode);
+    if (isShare) {
+        // Share recipients only ever see the recipient guide; the manage /
+        // admin guides describe master-only operations they can't perform.
+        audience = 'viewer';
+    } else {
+        audience = (audience === 'manage' || audience === 'master' || audience === 'viewer')
+            ? audience : _readHelpAudience();
+    }
     lang = (lang === 'en' || lang === 'ja') ? lang : _readHelpLang();
-    try { localStorage.setItem('desi:helpAudience', audience); } catch (e) {}
+    if (!isShare) { try { localStorage.setItem('desi:helpAudience', audience); } catch (e) {} }
     try { localStorage.setItem('desi:helpLang', lang); } catch (e) {}
     const cacheKey = audience + ':' + lang;
     const cfg = _helpGuideSources[cacheKey];
@@ -5202,8 +5209,8 @@ async function openHelpModal(audience, lang) {
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
           <h2 style="margin:0;">${cfg.title}</h2>
           <div style="display:flex;gap:4px;align-items:center;">
-            <div style="display:flex;gap:4px;">${_helpAudiences.map(a => audTab(a, audience === a.key)).join('')}</div>
-            <div style="width:1px;height:18px;background:#cbd5e1;margin:0 4px;"></div>
+            ${isShare ? '' : `<div style="display:flex;gap:4px;">${_helpAudiences.map(a => audTab(a, audience === a.key)).join('')}</div>
+            <div style="width:1px;height:18px;background:#cbd5e1;margin:0 4px;"></div>`}
             <div style="display:flex;gap:4px;">${langBtn('ja', lang === 'ja', '日本語')}${langBtn('en', lang === 'en', 'English')}</div>
           </div>
         </div>
