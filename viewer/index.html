@@ -1949,15 +1949,23 @@ class SectionPanel {
                     const r = d[i], g = d[i+1], b = d[i+2], a = d[i+3];
                     const lum = 0.299*r + 0.587*g + 0.114*b;
                     const n = Math.max(0, Math.min(1, (lum - settings.vmin) / range));
-                    // Out-of-raster pixels and in-raster near-zero pixels both
-                    // become transparent so the HE/IF backdrop drawn earlier
-                    // shows through. Without this, the colormap floor (Plasma
-                    // navy / Hot black / etc.) opaquely covers HE in low-signal
-                    // areas. The viewer-host CSS background is #000 so cells
-                    // without an HE layer still appear black — matching the
-                    // thumbnail row's near-zero look.
-                    if (a === 0 || lum < 1) {
+                    // Compositing rule:
+                    //   - Out-of-raster pixels (a === 0) stay transparent so
+                    //     HE/IF can fill the area outside the MSI scan box.
+                    //   - In-raster pixels are always opaque, regardless of
+                    //     signal strength. Near-zero luminance gets forced to
+                    //     pure black instead of `lut[0]` so the colormap
+                    //     floor (Plasma navy / Hot black / Viridis purple)
+                    //     doesn't show as a tinted backdrop.
+                    // ctx.globalAlpha = settings.opacity controls the blend
+                    // with the HE layer drawn earlier, so 100 % opacity
+                    // gives a complete cover (HE invisible inside the
+                    // raster, only visible around it) and lower opacity
+                    // proportionally reveals HE through the entire raster.
+                    if (a === 0) {
                         d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 0;
+                    } else if (lum < 1) {
+                        d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 255;
                     } else {
                         const c = lut[Math.round(n * 255)];
                         d[i] = c[0]; d[i+1] = c[1]; d[i+2] = c[2]; d[i+3] = 255;
