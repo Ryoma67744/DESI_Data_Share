@@ -45,6 +45,7 @@ body.share-mode #project-name-input,
 body.share-mode #tb-add-heif,
 body.share-mode #tb-add-msi,
 body.share-mode #tb-align-heif,
+body.share-mode #tb-rot-share-default,
 body.share-mode #tb-del-section { display:none !important; }
 body.share-mode #share-mode-banner { display:flex !important; }
 body.share-mode .picker-row .picker-row-dot,
@@ -260,12 +261,34 @@ body.share-mode .thumb-file-group .file-actions [data-action="rename"] { display
 }
 #share-preview-overlay .preview-header {
     display:flex; align-items:flex-start; justify-content:space-between;
-    padding:14px 22px 10px 22px; gap:18px;
+    padding:14px 22px 10px 22px; gap:18px; flex-wrap:wrap;
     background:#fff; color:#0f172a; border-bottom:1px solid #cbd5e1;
 }
 #share-preview-overlay .preview-title {
     font-size:20px; font-weight:700; line-height:1.25;
-    word-break:break-all;
+    word-break:break-all; flex:1 1 240px; min-width:0;
+}
+#share-preview-overlay .preview-controls {
+    display:flex; gap:14px; align-items:center; color:#1e293b;
+    font-size:12px; flex:0 0 auto;
+}
+#share-preview-overlay .preview-controls label {
+    display:inline-flex; gap:6px; align-items:center;
+}
+#share-preview-overlay .preview-controls input[type=range] { width:120px; }
+#share-preview-overlay .preview-controls select {
+    font-size:12px; padding:2px 6px; border:1px solid #cbd5e1;
+    border-radius:3px; background:#fff;
+}
+#share-preview-overlay .preview-controls .preview-reset-zoom {
+    padding:3px 10px; border:1px solid #cbd5e1; background:#fff;
+    border-radius:3px; cursor:pointer; font-size:12px;
+}
+#share-preview-overlay .preview-controls .preview-reset-zoom:hover {
+    background:#eef2ff; color:#1d4ed8; border-color:#93c5fd;
+}
+#share-preview-overlay .preview-controls [data-opacity-value] {
+    font-variant-numeric:tabular-nums; min-width:42px; text-align:right;
 }
 #share-preview-overlay .preview-header-right {
     display:flex; align-items:flex-start; gap:14px; flex-shrink:0;
@@ -330,14 +353,33 @@ body.share-mode .thumb-file-group .file-actions [data-action="rename"] { display
     margin-bottom:6px; text-align:center;
 }
 #share-preview-overlay .preview-image-cell .cell-img-wrap {
+    position:relative;
     flex:1 1 auto; min-height:0; min-width:0; width:100%;
-    background:#000; display:flex; align-items:center; justify-content:center; overflow:hidden;
+    background:#000; overflow:hidden; touch-action:none; cursor:grab;
+}
+#share-preview-overlay .preview-image-cell .cell-img-wrap.dragging { cursor:grabbing; }
+#share-preview-overlay .preview-image-cell .cell-img-stage {
+    position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    transition:none; will-change:transform;
 }
 #share-preview-overlay .preview-image-cell img {
     max-width:100%; max-height:100%; object-fit:contain; background:#000;
 }
 #share-preview-overlay .preview-image-cell .cell-empty {
     color:#64748b; font-size:11px; padding:12px;
+}
+#share-preview-overlay .cell-scalebar {
+    position:absolute; left:8px; bottom:8px; z-index:5;
+    background:rgba(255,255,255,0.85); color:#0f172a;
+    padding:3px 6px; border-radius:3px;
+    font-size:11px; font-weight:600;
+    display:flex; align-items:center; gap:6px;
+    pointer-events:none;
+}
+#share-preview-overlay .cell-scalebar .bar {
+    display:inline-block; height:3px;
+    background:#0f172a; box-shadow:0 0 0 1px #fff;
 }
 
 #share-preview-overlay .preview-stats {
@@ -509,6 +551,7 @@ body.share-mode #btn-share-preview { display:inline-flex; }
                     <input type="number" id="tb-rotation" step="1" min="-180" max="180" value="0" disabled>
                     <span class="tb-deg">°</span>
                     <button type="button" id="tb-rot-reset" class="tb-icon" title="Reset translate/rotate/zoom">↻</button>
+                    <button type="button" id="tb-rot-share-default" class="tb-icon" title="現在の回転角度を Share preview の初期値として保存">📌</button>
                     <button type="button" class="sync-toggle" data-sync="rot" title="Sync Rotation across sections">🔗</button>
                 </span>
             </div>
@@ -1177,21 +1220,11 @@ async function decodeImageBlobToDataUrl(blob, mime) {
     return await blobToDataUrl(blob);
 }
 
-// 256-step Plasma colormap LUT (matplotlib-style). Built once at module load
-// from a small set of stops and used to colour MSI rasters in
-// rasterRowsToPngDataUrl below.
-const PLASMA_LUT = (function () {
-    const stops = [
-        [0.000,  13,   8, 135],
-        [0.125,  75,   3, 161],
-        [0.250, 125,   3, 168],
-        [0.375, 168,  34, 150],
-        [0.500, 203,  70, 121],
-        [0.625, 229, 107,  93],
-        [0.750, 248, 148,  65],
-        [0.875, 253, 195,  40],
-        [1.000, 240, 249,  33],
-    ];
+// 256-step colormap LUTs (matplotlib-style). Built once at module load from
+// small sets of stops. PLASMA_LUT stays exported as the historical default;
+// the COLORMAPS registry lets the Share Preview swap between colormaps at
+// runtime without duplicating the renderComposite/renderMsiThumbnail paths.
+function buildLut(stops) {
     const lut = new Array(256);
     for (let i = 0; i < 256; i++) {
         const t = i / 255;
@@ -1207,7 +1240,84 @@ const PLASMA_LUT = (function () {
         ];
     }
     return lut;
-})();
+}
+
+const PLASMA_LUT = buildLut([
+    [0.000,  13,   8, 135],
+    [0.125,  75,   3, 161],
+    [0.250, 125,   3, 168],
+    [0.375, 168,  34, 150],
+    [0.500, 203,  70, 121],
+    [0.625, 229, 107,  93],
+    [0.750, 248, 148,  65],
+    [0.875, 253, 195,  40],
+    [1.000, 240, 249,  33],
+]);
+
+const VIRIDIS_LUT = buildLut([
+    [0.000,  68,   1,  84],
+    [0.125,  72,  35, 116],
+    [0.250,  64,  67, 135],
+    [0.375,  52,  94, 141],
+    [0.500,  41, 120, 142],
+    [0.625,  32, 144, 140],
+    [0.750,  34, 167, 132],
+    [0.875,  68, 190, 112],
+    [1.000, 253, 231,  37],
+]);
+
+const INFERNO_LUT = buildLut([
+    [0.000,   0,   0,   4],
+    [0.125,  31,  12,  72],
+    [0.250,  85,  15, 109],
+    [0.375, 136,  34, 106],
+    [0.500, 186,  54,  85],
+    [0.625, 227,  89,  51],
+    [0.750, 249, 140,  10],
+    [0.875, 249, 201,  50],
+    [1.000, 252, 255, 164],
+]);
+
+const HOT_LUT = buildLut([
+    [0.000,   0,   0,   0],
+    [0.333, 230,   0,   0],
+    [0.666, 255, 230,   0],
+    [1.000, 255, 255, 255],
+]);
+
+const JET_LUT = buildLut([
+    [0.000,   0,   0, 143],
+    [0.125,   0,   0, 255],
+    [0.375,   0, 255, 255],
+    [0.625, 255, 255,   0],
+    [0.875, 255,   0,   0],
+    [1.000, 128,   0,   0],
+]);
+
+const GRAYSCALE_LUT = buildLut([
+    [0.000,   0,   0,   0],
+    [1.000, 255, 255, 255],
+]);
+
+const COLORMAPS = {
+    plasma:    PLASMA_LUT,
+    viridis:   VIRIDIS_LUT,
+    inferno:   INFERNO_LUT,
+    hot:       HOT_LUT,
+    jet:       JET_LUT,
+    grayscale: GRAYSCALE_LUT,
+};
+
+// Active colormap name. renderComposite() and renderMsiThumbnail() read this
+// each call so SharePreview can swap colormaps live; SharePreview restores
+// the original value on close.
+let _activeColormapName = 'plasma';
+function getActiveColormap() {
+    return COLORMAPS[_activeColormapName] || PLASMA_LUT;
+}
+function setActiveColormap(name) {
+    if (COLORMAPS[name]) _activeColormapName = name;
+}
 
 function rasterRowsToPngDataUrl(rows, range) {
     const xs = [...new Set(rows.map(r => r.x))].sort((a, b) => a - b);
@@ -1821,6 +1931,7 @@ class SectionPanel {
                 const data = tctx.getImageData(0, 0, tc.width, tc.height);
                 const d = data.data;
                 const range = (settings.vmax - settings.vmin) || 1;
+                const lut = getActiveColormap();
                 for (let i = 0; i < d.length; i += 4) {
                     const r = d[i], g = d[i+1], b = d[i+2], a = d[i+3];
                     const lum = 0.299*r + 0.587*g + 0.114*b;
@@ -1828,15 +1939,15 @@ class SectionPanel {
                     // Out-of-raster pixels stay transparent; near-zero raster
                     // pixels are forced to opaque black so MSI Opacity still
                     // covers HE across the whole measured area but the dark
-                    // Plasma navy doesn't show through. Matches the rule used
-                    // by renderMsiThumbnail() so the main canvas and the
-                    // thumbnails share the same near-zero appearance.
+                    // colormap floor doesn't show through. Matches the rule
+                    // used by renderMsiThumbnail() so the main canvas and
+                    // the thumbnails share the same near-zero appearance.
                     if (a === 0) {
                         d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 0;
                     } else if (lum < 1) {
                         d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 255;
                     } else {
-                        const c = PLASMA_LUT[Math.round(n * 255)];
+                        const c = lut[Math.round(n * 255)];
                         d[i] = c[0]; d[i+1] = c[1]; d[i+2] = c[2]; d[i+3] = 255;
                     }
                 }
@@ -3071,13 +3182,14 @@ class SectionPanel {
         const d = data.data;
         const st = this.imageSettings[key] || { vmin: 0, vmax: 255 };
         const range = (st.vmax - st.vmin) || 1;
+        const lut = getActiveColormap();
         for (let i = 0; i < d.length; i += 4) {
             if (d[i+3] === 0) continue;
             const lum = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
             if (lum < 1) { d[i] = 0; d[i+1] = 0; d[i+2] = 0; continue; }
             const n = Math.max(0, Math.min(1, (lum - st.vmin) / range));
-            const c = PLASMA_LUT[Math.round(n * 255)];
-            d[i] = c[0]; d[i+1] = c[1]; d[i+2] = c[2];
+            const cm = lut[Math.round(n * 255)];
+            d[i] = cm[0]; d[i+1] = cm[1]; d[i+2] = cm[2];
         }
         ctx.putImageData(data, 0, 0);
         im.src = c.toDataURL();
@@ -4256,12 +4368,13 @@ const Wizards = {
             const v0 = Number.isFinite(vmin) ? vmin : 0;
             const v1 = Number.isFinite(vmax) && vmax > v0 ? vmax : v0 + 1;
             const range = v1 - v0;
+            const lut = getActiveColormap();
             for (let i = 0; i < d.length; i += 4) {
                 if (d[i+3] === 0) continue;
                 const lum = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
                 if (lum < 1) { d[i] = 0; d[i+1] = 0; d[i+2] = 0; continue; }
                 const n = Math.max(0, Math.min(1, (lum - v0) / range));
-                const cm = PLASMA_LUT[Math.round(n * 255)];
+                const cm = lut[Math.round(n * 255)];
                 d[i] = cm[0]; d[i+1] = cm[1]; d[i+2] = cm[2];
             }
             cctx.putImageData(data, 0, 0);
@@ -5591,14 +5704,99 @@ const SharePreview = {
     overlay: null,
     role: 'viewer',
     compoundKeys: [],
+    // Preview-only state — restored / cleared on close.
+    _opacitySnapshot: null,    // Array<{panelId, byKey: Map<msiKey, opacity>}>
+    _savedColormap: null,       // colormap name to restore on close
+    _opacityRaf: 0,             // rAF handle coalescing slider events
+    _pendingOpacity: 1,         // last slider value queued for next rAF
+    _cellTransforms: [],        // per-cell {tx, ty, scale}
+    _sectionRotations: [],      // per-cell shareDefaultRotation in degrees
+    _onKeyDownBound: null,
 
     isOpen() { return !!(this.overlay && document.body.contains(this.overlay)); },
 
     close() {
-        if (this.overlay) {
-            this.overlay.remove();
-            this.overlay = null;
+        if (!this.overlay) return;
+        try { this._restoreOpacity(); } catch (e) { console.warn('SharePreview restore opacity failed', e); }
+        if (this._savedColormap) {
+            setActiveColormap(this._savedColormap);
+            this._savedColormap = null;
         }
+        // Re-render every panel so the underlying detailed view's cdisp
+        // reflects the restored colormap (opacity already handled by
+        // _restoreOpacity).
+        if (App && App.panels) {
+            for (const p of App.panels.values()) {
+                try { p.renderComposite(); } catch (e) {}
+            }
+        }
+        if (this._opacityRaf) {
+            cancelAnimationFrame(this._opacityRaf);
+            this._opacityRaf = 0;
+        }
+        this._opacitySnapshot = null;
+        this._cellTransforms = [];
+        this._sectionRotations = [];
+        this._onKeyDownBound = null;
+        this.overlay.remove();
+        this.overlay = null;
+    },
+
+    // Snapshot every panel's MSI layer opacity so we can restore it on close.
+    // Mirrors the structure of App.panels (Map<sectionId, panel>).
+    _snapshotOpacity() {
+        const snap = [];
+        if (!App || !App.panels) { this._opacitySnapshot = snap; return; }
+        for (const [pid, panel] of App.panels.entries()) {
+            const byKey = {};
+            const settings = panel && panel.imageSettings;
+            if (settings) {
+                for (const key of Object.keys(settings)) {
+                    if (!/^MSI_/i.test(key)) continue;
+                    byKey[key] = settings[key].opacity;
+                }
+            }
+            snap.push({ pid, byKey });
+        }
+        this._opacitySnapshot = snap;
+    },
+
+    // Write the snapshot back into the live panels and re-render. Called by
+    // close(); never modifies the snapshot itself.
+    _restoreOpacity() {
+        if (!this._opacitySnapshot || !App || !App.panels) return;
+        for (const entry of this._opacitySnapshot) {
+            const panel = App.panels.get(entry.pid);
+            if (!panel || !panel.imageSettings) continue;
+            for (const [key, opacity] of Object.entries(entry.byKey)) {
+                if (panel.imageSettings[key]) panel.imageSettings[key].opacity = opacity;
+            }
+            try { panel.renderComposite(); } catch (e) {}
+        }
+    },
+
+    // Apply a preview-only MSI opacity (0..1) across every section. Mutates
+    // panel.imageSettings[k].opacity directly without queueSave/broadcastSync,
+    // because share recipients have no IndexedDB persistence and we never
+    // want to leak the slider value into the detailed view's saved state.
+    _applyPreviewOpacity(value01) {
+        this._pendingOpacity = Math.max(0, Math.min(1, Number(value01) || 0));
+        if (this._opacityRaf) return;
+        this._opacityRaf = requestAnimationFrame(() => {
+            this._opacityRaf = 0;
+            const v = this._pendingOpacity;
+            if (!App || !App.panels) return;
+            for (const panel of App.panels.values()) {
+                const settings = panel && panel.imageSettings;
+                if (!settings) continue;
+                for (const key of Object.keys(settings)) {
+                    if (!/^MSI_/i.test(key)) continue;
+                    settings[key].opacity = v;
+                }
+                try { panel.renderComposite(); } catch (e) {}
+            }
+            try { this.refresh(App.project); } catch (e) {}
+        });
     },
 
     open(project, role) {
@@ -5615,6 +5813,13 @@ const SharePreview = {
         if (allKeys.size === 0) return;
         this.compoundKeys = Array.from(allKeys);
 
+        // Save state we'll need to restore on close. Snapshot must run before
+        // any preview-only mutation so we capture the pre-preview values.
+        this._savedColormap = _activeColormapName;
+        this._snapshotOpacity();
+        this._cellTransforms = [];
+        this._sectionRotations = [];
+
         if (App.viewMode !== 'compound') App.setViewMode('compound');
         const desiredFocus = (App.focusCompoundKey && allKeys.has(App.focusCompoundKey))
             ? App.focusCompoundKey
@@ -5629,6 +5834,23 @@ const SharePreview = {
         overlay.innerHTML = `
             <div class="preview-header">
                 <div class="preview-title" data-preview-title></div>
+                <div class="preview-controls">
+                    <label>MSI Opacity
+                        <input type="range" min="0" max="100" value="100" step="1" data-opacity-slider>
+                        <span data-opacity-value>100%</span>
+                    </label>
+                    <label>Colormap
+                        <select data-colormap-select>
+                            <option value="plasma">Plasma</option>
+                            <option value="viridis">Viridis</option>
+                            <option value="inferno">Inferno</option>
+                            <option value="hot">Hot</option>
+                            <option value="jet">Jet</option>
+                            <option value="grayscale">Grayscale</option>
+                        </select>
+                    </label>
+                    <button type="button" class="preview-reset-zoom" data-reset-zoom>Reset zoom</button>
+                </div>
                 <div class="preview-header-right">
                     <div class="preview-headerbar">
                         <span class="bar" data-headerbar-bar></span>
@@ -5662,7 +5884,59 @@ const SharePreview = {
         document.body.appendChild(overlay);
         this.overlay = overlay;
 
+        // Make the overlay focusable so it can capture ArrowUp/Down without
+        // requiring the user to click a control first.
+        overlay.tabIndex = 0;
+        this._onKeyDownBound = this._onKeyDown.bind(this);
+        overlay.addEventListener('keydown', this._onKeyDownBound);
+        // Defer focus until after layout so the slider/select don't grab
+        // focus first via auto-focus heuristics.
+        requestAnimationFrame(() => {
+            if (this.isOpen()) overlay.focus();
+        });
+
         overlay.querySelector('[data-preview-close]').addEventListener('click', () => this.close());
+
+        // MSI opacity slider — preview-only, rAF-coalesced.
+        const slider = overlay.querySelector('[data-opacity-slider]');
+        const sliderLabel = overlay.querySelector('[data-opacity-value]');
+        if (slider) {
+            slider.addEventListener('input', () => {
+                const v = Number(slider.value);
+                if (sliderLabel) sliderLabel.textContent = v + '%';
+                this._applyPreviewOpacity(v / 100);
+            });
+        }
+
+        // Colormap selector — mutates the global active colormap so every
+        // panel's renderComposite picks it up. Restored in close().
+        const sel = overlay.querySelector('[data-colormap-select]');
+        if (sel) {
+            sel.value = _activeColormapName;
+            sel.addEventListener('change', () => {
+                setActiveColormap(sel.value);
+                this._drawColorbar();
+                if (App && App.panels) {
+                    for (const p of App.panels.values()) {
+                        try { p.renderComposite(); } catch (e) {}
+                    }
+                }
+                this.refresh(project);
+            });
+        }
+
+        // Reset zoom — clears every cell's transform and re-applies (rotation
+        // is preserved because it comes from section.meta, not from
+        // _cellTransforms).
+        const resetBtn = overlay.querySelector('[data-reset-zoom]');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', () => {
+                if (!Array.isArray(this._cellTransforms)) return;
+                for (let i = 0; i < this._cellTransforms.length; i++) {
+                    this._applyCellTransform(i, true);
+                }
+            });
+        }
 
         this._drawColorbar();
         this._renderMethodList(project);
@@ -5687,9 +5961,10 @@ const SharePreview = {
         cv.height = 256;
         const ctx = cv.getContext('2d');
         const img = ctx.createImageData(cv.width, cv.height);
+        const lut = getActiveColormap();
         for (let y = 0; y < cv.height; y++) {
             const t = 1 - (y / (cv.height - 1));
-            const c = PLASMA_LUT[Math.round(t * 255)];
+            const c = lut[Math.round(t * 255)];
             for (let x = 0; x < cv.width; x++) {
                 const idx = (y * cv.width + x) * 4;
                 img.data[idx] = c[0];
@@ -5755,7 +6030,13 @@ const SharePreview = {
         if (!grid) return;
         const sections = project.sections || [];
         grid.style.gridTemplateColumns = `repeat(${Math.max(sections.length, 1)}, minmax(0, 1fr))`;
-        const cells = sections.map(sec => {
+        // Reset per-cell transform/rotation state for the new render.
+        this._cellTransforms = sections.map(() => ({ tx: 0, ty: 0, scale: 1 }));
+        this._sectionRotations = sections.map(sec => {
+            const r = sec && sec.meta && sec.meta.shareDefaultRotation;
+            return Number.isFinite(r) ? r : 0;
+        });
+        const cells = sections.map((sec, idx) => {
             const safeName = String(sec.displayName || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
             const ent = (sec.msiSeries || {})[focusKey];
             const projName = String(project.displayName || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
@@ -5770,16 +6051,134 @@ const SharePreview = {
                 try { dataUrl = panel.dom.cdisp.toDataURL('image/png'); }
                 catch (e) { console.warn('preview toDataURL failed', e); }
                 body = dataUrl
-                    ? `<img src="${dataUrl}" alt="${safeName}">`
+                    ? `<img src="${dataUrl}" alt="${safeName}" data-cell-img>`
                     : '<div class="cell-empty">Render failed</div>';
+            }
+            // Per-section scalebar — read μm/px from this section's own
+            // world_coords so heterogeneous projects (different acquisition
+            // resolution per slide) render correctly. The bar lives inside
+            // the same transformed stage as the <img> so it grows / rotates
+            // with the image when the user zooms or rotates the cell.
+            const wc = sec && sec.meta && sec.meta.world_coords;
+            const umPerPx = wc && wc.msi_um_per_px && Number.isFinite(wc.msi_um_per_px.x)
+                ? wc.msi_um_per_px.x : null;
+            const chosen = pickPreviewScalebarLength(umPerPx, 100);
+            let scalebarHtml = '';
+            if (chosen) {
+                const px = Math.max(40, Math.min(200, chosen / umPerPx));
+                const labelText = chosen >= 1000 ? (chosen / 1000) + ' mm' : chosen + ' μm';
+                const safeLabel = String(labelText).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+                scalebarHtml = `<div class="cell-scalebar"><span class="bar" style="width:${px.toFixed(1)}px"></span><span class="label">${safeLabel}</span></div>`;
             }
             return `
                 <div class="preview-image-cell">
                     <div class="cell-title">${caption}</div>
-                    <div class="cell-img-wrap">${body}</div>
+                    <div class="cell-img-wrap" data-cell-idx="${idx}">
+                        <div class="cell-img-stage" data-cell-stage>${body}${scalebarHtml}</div>
+                    </div>
                 </div>`;
         });
         grid.innerHTML = cells.join('');
+
+        // Attach pan/zoom handlers + apply initial rotation via CSS transform
+        // on the stage element (so the scalebar and image scale together).
+        // Cells without an image (e.g. compound missing in this section) get
+        // the rotation applied to the placeholder but no interaction wiring.
+        const wraps = grid.querySelectorAll('.cell-img-wrap');
+        wraps.forEach(wrap => {
+            const idx = Number(wrap.getAttribute('data-cell-idx'));
+            const stage = wrap.querySelector('[data-cell-stage]');
+            if (!Number.isFinite(idx) || !stage) return;
+            this._applyCellTransform(idx);
+            const img = stage.querySelector('[data-cell-img]');
+            if (img) this._wireCellInteractions(idx, wrap, stage);
+            else wrap.style.cursor = 'default';
+        });
+    },
+
+    // Compose the cell stage's CSS transform from the per-cell pan/zoom
+    // state and the master-saved rotation. Order is translate → rotate →
+    // scale so rotation pivots around the visual center after pan,
+    // mirroring the detailed view's `viewer-rot` transform composition.
+    _applyCellTransform(idx, reset) {
+        if (reset) this._cellTransforms[idx] = { tx: 0, ty: 0, scale: 1 };
+        const t = this._cellTransforms[idx] || (this._cellTransforms[idx] = { tx: 0, ty: 0, scale: 1 });
+        const rot = this._sectionRotations[idx] || 0;
+        const grid = this.overlay && this.overlay.querySelector('[data-image-grid]');
+        const wrap = grid && grid.querySelector(`.cell-img-wrap[data-cell-idx="${idx}"]`);
+        const stage = wrap && wrap.querySelector('[data-cell-stage]');
+        if (!stage) return;
+        stage.style.transform =
+            `translate(${t.tx}px, ${t.ty}px) rotate(${rot}deg) scale(${t.scale})`;
+        stage.style.transformOrigin = '50% 50%';
+    },
+
+    // Pan (pointer drag) + zoom (wheel) on a single cell. Each cell owns its
+    // own transform; no syncing across sections by design. The handler is
+    // attached to the wrap (the un-transformed clipping container) so events
+    // arrive in screen-pixel coordinates regardless of the stage's current
+    // rotation/scale.
+    _wireCellInteractions(idx, wrapEl, stageEl) {
+        const ensure = () => this._cellTransforms[idx] || (this._cellTransforms[idx] = { tx: 0, ty: 0, scale: 1 });
+        let dragging = false, startX = 0, startY = 0, startTx = 0, startTy = 0, ptrId = null;
+        wrapEl.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const t = ensure();
+            const next = t.scale * Math.exp(-e.deltaY * 0.001);
+            t.scale = Math.max(0.2, Math.min(8, next));
+            this._applyCellTransform(idx);
+        }, { passive: false });
+        wrapEl.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0 && e.pointerType === 'mouse') return;
+            const t = ensure();
+            dragging = true;
+            ptrId = e.pointerId;
+            startX = e.clientX; startY = e.clientY;
+            startTx = t.tx; startTy = t.ty;
+            wrapEl.classList.add('dragging');
+            try { wrapEl.setPointerCapture(e.pointerId); } catch (er) {}
+        });
+        wrapEl.addEventListener('pointermove', (e) => {
+            if (!dragging || e.pointerId !== ptrId) return;
+            const t = ensure();
+            t.tx = startTx + (e.clientX - startX);
+            t.ty = startTy + (e.clientY - startY);
+            this._applyCellTransform(idx);
+        });
+        const endDrag = (e) => {
+            if (!dragging) return;
+            dragging = false;
+            ptrId = null;
+            wrapEl.classList.remove('dragging');
+            try { wrapEl.releasePointerCapture(e.pointerId); } catch (er) {}
+        };
+        wrapEl.addEventListener('pointerup', endDrag);
+        wrapEl.addEventListener('pointercancel', endDrag);
+    },
+
+    // Overlay-level keyboard nav. Skip when focus is on an interactive
+    // control so the slider's native arrow-key step / select's open behavior
+    // are preserved.
+    _onKeyDown(e) {
+        const tag = e.target && e.target.tagName;
+        if (tag && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(tag)) return;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            this.close();
+            return;
+        }
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        if (!Array.isArray(this.compoundKeys) || this.compoundKeys.length === 0) return;
+        const cur = App && App.focusCompoundKey;
+        const idx = this.compoundKeys.indexOf(cur);
+        const baseIdx = idx >= 0 ? idx : 0;
+        const next = e.key === 'ArrowDown'
+            ? Math.min(baseIdx + 1, this.compoundKeys.length - 1)
+            : Math.max(baseIdx - 1, 0);
+        e.preventDefault();
+        if (next === idx) return;
+        App.setFocusCompoundKey(this.compoundKeys[next]);
+        this.refresh(App.project);
     },
 
     _renderStatsTable(project, focusKey) {
@@ -6279,6 +6678,7 @@ const Toolbar = {
         this.alignHeIfBtn = document.getElementById('tb-align-heif');
         this.delBtn = document.getElementById('tb-del-section');
         this.rotResetBtn = document.getElementById('tb-rot-reset');
+        this.rotShareDefaultBtn = document.getElementById('tb-rot-share-default');
         this.syncButtons = this.el.querySelectorAll('.sync-toggle');
 
         this.pickerBtn.addEventListener('click', (ev) => { ev.stopPropagation(); this.togglePickerMenu(); });
@@ -6305,6 +6705,18 @@ const Toolbar = {
         this.opacityInp.addEventListener('change', () => { const p = this.activePanel(); if (p) p.applyOpacity(this.opacityInp.value); });
         this.rotationInp.addEventListener('change', () => { const p = this.activePanel(); if (p) p.applyRotation(this.rotationInp.value); });
         this.rotResetBtn.addEventListener('click', () => { const p = this.activePanel(); if (p) p.resetTransform(); });
+        if (this.rotShareDefaultBtn) {
+            this.rotShareDefaultBtn.addEventListener('click', () => {
+                const p = this.activePanel();
+                if (!p || !p.section) return;
+                const sec = p.section;
+                sec.meta = sec.meta || {};
+                const liveRot = Number(p.getRotation());
+                sec.meta.shareDefaultRotation = Number.isFinite(liveRot) ? liveRot : 0;
+                App.queueSave();
+                showToast('Share preview の初期角度を保存しました: ' + sec.meta.shareDefaultRotation + '°');
+            });
+        }
 
         this.syncButtons.forEach(btn => {
             const name = btn.dataset.sync;
