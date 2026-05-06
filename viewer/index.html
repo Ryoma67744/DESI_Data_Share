@@ -3967,7 +3967,8 @@ function openShareUnlockModal(slug) {
         <h2>共有プロジェクト</h2>
         <form>
           <p style="font-size:11px;color:#475569;margin-bottom:6px;">
-            <code>${safeSlug}</code> の閲覧パスワードを入力してください。
+            <code>${safeSlug}</code> の閲覧パスワードを入力してください。<br>
+            <span style="color:#64748b;">Admin としてログインしたい場合は viewer password で入った後、preview 上部の 🔑 Admin ボタンから切り替えてください。</span>
           </p>
           <label>Password
             <input type="password" name="pw" required autocomplete="current-password">
@@ -7918,6 +7919,15 @@ const App = {
                 const row = Array.isArray(raw) ? raw[0] : raw;
                 if (!row || !row.token) {
                     showToast('パスワードが違います');
+                    this.renderEmpty();
+                    return;
+                }
+                // The start-of-session modal accepts only viewer passwords.
+                // Admin entry is reserved for the 🔑 Admin button on the
+                // preview overlay so the admin token never lands in
+                // sessionStorage unless the user explicitly elevated.
+                if (row.role !== 'viewer') {
+                    showToast('Viewer password を入力してください (admin は preview 上部の 🔑 Admin ボタンから)', 5000);
                     this.renderEmpty();
                     return;
                 }
