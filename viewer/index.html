@@ -7511,6 +7511,26 @@ const SupabaseClient = (() => {
         // is_public flag is true. Throws otherwise (caller falls back to
         // password modal).
         unlockPublicProject(slug) { return rpc('unlock_public_project', { _slug: slug }); },
+        // Probe a slug's is_public flag via column-restricted anon SELECT.
+        // Returns { slug, is_public, display_name } or null. bootstrapShareMode
+        // uses this to decide between the password modal and the public-link
+        // path before any RPC is attempted, which avoids showing the password
+        // modal on a project the master marked as public.
+        async getProjectPublicState(slug) {
+            const c = _client();
+            if (!c) return null;
+            try {
+                const { data, error } = await c.from('projects')
+                    .select('slug,is_public,display_name')
+                    .eq('slug', slug)
+                    .maybeSingle();
+                if (error) { lastError = error; return null; }
+                return data;
+            } catch (e) {
+                lastError = e;
+                return null;
+            }
+        },
         // Read paths -------------------------------------------
         fetchProjectDoc(token) { return rpc('get_project_doc', { p_token: token }); },
         listRois(token, sectionId) { return rpc('list_rois', { p_token: token, p_section_id: sectionId || null }); },
@@ -7839,20 +7859,38 @@ const App = {
 
         let session = stored;
         if (!session) {
-            // Public-link path: try unlock_public_project first. If the
-            // project's is_public flag is true, this returns a viewer
-            // token without prompting the user. Any error (raise
-            // 'not_public', or an older Supabase project that doesn't
-            // know the RPC yet) falls through to the password modal so
-            // the existing private flow stays intact.
-            let publicRaw = null;
-            try {
-                publicRaw = await SupabaseClient.unlockPublicProject(slug);
-            } catch (e) {
-                publicRaw = null;
-            }
-            const publicRow = Array.isArray(publicRaw) ? publicRaw[0] : publicRaw;
-            if (publicRow && publicRow.token) {
+            // Probe is_public via column-restricted anon SELECT before any
+            // RPC. If the row says is_public=true we commit to the public
+            // path and treat unlock_public_project failure as a hard error
+            // (no fallback to the password modal — that would be misleading
+            // for a public link). If is_public=false or the probe fails
+            // (anon SELECT not granted yet on an unmigrated DB), we fall
+            // through to the existing password-modal path.
+            const meta = await SupabaseClient.getProjectPublicState(slug);
+            const isPublicProject = !!(meta && meta.is_public);
+
+            if (isPublicProject) {
+                let publicRaw = null;
+                try {
+                    publicRaw = await SupabaseClient.unlockPublicProject(slug);
+                } catch (e) {
+                    console.warn('unlock_public_project failed despite is_public=true', e);
+                    const code = e && e.code;
+                    const msg = String((e && (e.message || e.details)) || '');
+                    if (code === 'PGRST202' || /Could not find the function/i.test(msg)) {
+                        showToast('Supabase の SQL を最新版に更新してください (unlock_public_project が見つかりません)。', 6000);
+                    } else {
+                        showToast('公開リンクのロック解除に失敗しました: ' + msg, 6000);
+                    }
+                    this.renderEmpty();
+                    return;
+                }
+                const publicRow = Array.isArray(publicRaw) ? publicRaw[0] : publicRaw;
+                if (!publicRow || !publicRow.token) {
+                    showToast('公開リンクのロック解除に失敗しました');
+                    this.renderEmpty();
+                    return;
+                }
                 session = {
                     slug,
                     token: publicRow.token,

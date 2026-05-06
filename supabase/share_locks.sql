@@ -373,6 +373,25 @@ end
 $$;
 grant execute on function public.unlock_public_project(text) to anon, authenticated;
 
+-- ---- 3c. Anon-readable public-state column subset -----------
+-- bootstrapShareMode() needs to know whether a slug is a public link
+-- before it decides between the password modal and unlock_public_project.
+-- Without a direct read path, an unmigrated Supabase project (where
+-- unlock_public_project doesn't exist yet) silently falls back to the
+-- password modal even for is_public=true rows.
+--
+-- The grant below restricts anon to four non-sensitive columns, so the
+-- jsonb `meta` (memo, palette tweaks) and `anatomy_palette` stay private
+-- from anon. The accompanying RLS policy is required for PostgREST to
+-- return any rows once RLS is enabled (column GRANT alone is not enough).
+revoke select on public.projects from anon;
+grant  select (id, slug, is_public, display_name) on public.projects to anon;
+
+drop policy if exists "projects anon select public meta" on public.projects;
+create policy "projects anon select public meta" on public.projects
+    for select to anon
+    using (true);
+
 -- ---- 4. Storage policies for the `atlases` bucket -----------
 -- schema.sql creates the bucket with `public = true`, which only governs
 -- public READ. Writes (INSERT/UPDATE/DELETE on storage.objects) are still
