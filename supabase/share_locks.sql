@@ -564,19 +564,21 @@ grant execute on function public.list_projects(text) to anon, authenticated;
 -- ---- 6b. delete_project_doc: Master-side server removal ------------
 -- Drops the project row (cascade-deletes sections / rois / credentials
 -- / session_tokens / roi_locks via existing FKs at schema.sql:32,40,
--- 51,73 and share_locks.sql:10), then sweeps every storage.objects
--- row referenced by sections.storage_paths so the atlases bucket
--- doesn't grow orphaned blobs. master-pw gated to keep this off the
--- share-recipient surface; the management page is the only entry
--- point in the frontend.
+-- 51,73 and share_locks.sql:10) and returns the storage paths the
+-- caller should sweep separately. Supabase blocks direct DELETE from
+-- storage tables even from SECURITY DEFINER functions ("Direct
+-- deletion from storage tables is not allowed"), so the storage cleanup
+-- runs from the browser using the existing publish-session storage
+-- policy (paths are returned here so the frontend doesn't have to
+-- re-derive them from a separate fetch_project_doc call).
+-- master-pw gated to keep this off the share-recipient surface.
 create or replace function public.delete_project_doc(_master_pw text, _slug text)
 returns jsonb
 language plpgsql security definer set search_path = public, extensions
 as $$
 declare
     v_pid uuid;
-    v_paths text[];
-    v_count int := 0;
+    v_paths jsonb;
 begin
     if not public._verify_master_pw(_master_pw) then
         raise exception 'unauthorized' using errcode = '28000';
@@ -586,13 +588,9 @@ begin
     end if;
     select id into v_pid from public.projects where slug = _slug limit 1;
     if v_pid is null then
-        return jsonb_build_object('ok', true, 'reason', 'not_found', 'paths_deleted', 0);
+        return jsonb_build_object('ok', true, 'reason', 'not_found', 'paths', '[]'::jsonb);
     end if;
-    -- Gather every storage path referenced by sections.storage_paths.
-    -- Both `images` and `msiSeries` dictionaries store { path, mime,
-    -- filename } per layer key; we don't care about the key, just the
-    -- path string.
-    select array_agg(p) into v_paths from (
+    select coalesce(jsonb_agg(p), '[]'::jsonb) into v_paths from (
         select v->>'path' as p
           from public.sections s,
                jsonb_each(coalesce(s.storage_paths->'images', '{}'::jsonb)) AS img(k, v)
@@ -603,15 +601,8 @@ begin
                jsonb_each(coalesce(s.storage_paths->'msiSeries', '{}'::jsonb)) AS msi(k, v)
          where s.project_id = v_pid AND v->>'path' IS NOT NULL
     ) all_paths;
-    if v_paths is not null and array_length(v_paths, 1) > 0 then
-        -- SECURITY DEFINER runs as the function owner (postgres), which
-        -- holds DELETE on storage.objects regardless of bucket policy.
-        delete from storage.objects
-         where bucket_id = 'atlases' AND name = ANY(v_paths);
-        get diagnostics v_count = row_count;
-    end if;
     delete from public.projects where id = v_pid;
-    return jsonb_build_object('ok', true, 'project_id', v_pid, 'paths_deleted', v_count);
+    return jsonb_build_object('ok', true, 'project_id', v_pid, 'paths', v_paths);
 end
 $$;
 

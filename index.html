@@ -186,6 +186,33 @@ const SupabaseClient = (() => {
         listProjects(ownerPw) { return rpc('list_projects', { _owner_password: ownerPw }); },
         verifyMasterPw(pw) { return rpc('verify_master_pw', { _pw: pw }); },
         deleteProjectDoc(masterPw, slug) { return rpc('delete_project_doc', { _master_pw: masterPw, _slug: slug }); },
+        // Mints a short-lived publish-session token. The token is written
+        // into publish_sessions and authorises the matching slug's storage
+        // writes (insert / update / delete) via the policy at
+        // share_locks.sql §4. Used here to wipe orphan storage objects
+        // after delete_project_doc removes the projects row.
+        requestPublishSession(masterPw, slug) {
+            return rpc('request_publish_session', { _master_pw: masterPw, _slug: slug });
+        },
+        // Direct Storage REST DELETE so we can attach the x-publish-token
+        // header (supabase-js's storage.remove() doesn't expose per-call
+        // headers). Wrapping fetch lets us reuse the same publish_session
+        // token across many path deletions.
+        async deleteStorageObject(bucket, path, publishToken) {
+            if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) throw new Error('supabase_not_configured');
+            const url = window.SUPABASE_URL.replace(/\/+$/, '') + '/storage/v1/object/'
+                      + encodeURIComponent(bucket) + '/' + path.split('/').map(encodeURIComponent).join('/');
+            const headers = {
+                'Authorization': 'Bearer ' + window.SUPABASE_ANON_KEY,
+                'apikey': window.SUPABASE_ANON_KEY,
+            };
+            if (publishToken) headers['x-publish-token'] = publishToken;
+            const resp = await fetch(url, { method: 'DELETE', headers });
+            if (!resp.ok && resp.status !== 404) {
+                const body = await resp.text().catch(() => '');
+                throw new Error('storage delete failed: HTTP ' + resp.status + ' ' + body);
+            }
+        },
     };
 })();
 
@@ -605,18 +632,48 @@ async function renderList() {
                 if (!masterPw) return;
             }
             try {
-                const r = await SupabaseClient.deleteProjectDoc(masterPw, slug);
-                if (r && r.ok) {
-                    // master pw キャッシュ更新 (12 h)
-                    try {
-                        sessionStorage.setItem('desi:masterPw',
-                            JSON.stringify({ pw: masterPw, expiresAt: Date.now() + 12 * 3600 * 1000 }));
-                    } catch (e) {}
-                    alert('削除しました (storage objects: ' + (r.paths_deleted || 0) + ' 件)');
-                    await renderList();
-                } else {
-                    alert('削除失敗: ' + JSON.stringify(r));
+                // 1. publish_session token を先にミント (storage delete に
+                //    必要、share_locks.sql §4 のポリシー)。失敗するなら
+                //    master pw が違う可能性大なのでここで弾く。
+                let publishToken = null;
+                try {
+                    const sess = await SupabaseClient.requestPublishSession(masterPw, slug);
+                    publishToken = sess && sess.token;
+                } catch (e) {
+                    const msg = String((e && (e.message || e.details)) || '');
+                    if (/unauthorized|28000/i.test(msg)) {
+                        alert('Master password が違います');
+                        return;
+                    }
+                    console.warn('publish session mint failed', e);
                 }
+                // 2. delete_project_doc で DB 行削除 + storage path 一覧取得
+                const r = await SupabaseClient.deleteProjectDoc(masterPw, slug);
+                if (!r || r.ok !== true) {
+                    alert('削除失敗: ' + JSON.stringify(r));
+                    return;
+                }
+                // 3. 各 path を Storage API 経由で削除 (publish-token 経路)
+                const paths = Array.isArray(r.paths) ? r.paths : [];
+                let deleted = 0, failed = 0;
+                for (const p of paths) {
+                    try {
+                        await SupabaseClient.deleteStorageObject('atlases', p, publishToken);
+                        deleted++;
+                    } catch (e) {
+                        console.warn('storage delete failed for', p, e);
+                        failed++;
+                    }
+                }
+                // master pw キャッシュ更新 (12 h)
+                try {
+                    sessionStorage.setItem('desi:masterPw',
+                        JSON.stringify({ pw: masterPw, expiresAt: Date.now() + 12 * 3600 * 1000 }));
+                } catch (e) {}
+                let msg = '削除しました (DB: ok, storage objects: ' + deleted + ' 件)';
+                if (failed) msg += ' / 失敗: ' + failed + ' 件 (orphan blob として残ります)';
+                alert(msg);
+                await renderList();
             } catch (e) {
                 const msg = String((e && (e.message || e.details)) || '');
                 if (/unauthorized|28000/i.test(msg)) alert('Master password が違います');
@@ -843,6 +900,6 @@ document.addEventListener('DOMContentLoaded', () => { init().catch(e => { consol
 </script>
 <!-- Build tag: bumped on every push so a maintainer / recipient can spot a
      stale cached copy. Same value as viewer/index.html, kept in sync by hand. -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-07-r6</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-07-r7</div>
 </body>
 </html>
