@@ -8435,11 +8435,26 @@ const App = {
 
         await this.refreshProjectPicker();
         // The new root /index.html drives project selection. Look for
-        // ?project=<id> first (came from a row click), then fall back to
-        // the previously-opened project. If nothing matches, redirect the
-        // user to the project management page rather than showing an empty
+        // ?import=<slug> first (came from "Open (master)" on a server-only
+        // row — pull project data into Local IDB then continue), then
+        // ?project=<id> (came from a row click), then fall back to the
+        // previously-opened project. If nothing matches, redirect the user
+        // to the project management page rather than showing an empty
         // viewer.
         const params = new URLSearchParams(location.search || '');
+        const importSlug = (params.get('import') || '').trim();
+        if (importSlug) {
+            this.wireUi();
+            const newId = await this._importProjectFromServer(importSlug);
+            if (newId) {
+                history.replaceState({}, '', location.pathname + '?project=' + encodeURIComponent(newId));
+                try { await this.openProject(newId); }
+                catch (e) { console.warn('open after import failed', e); this.renderEmpty(); }
+            } else {
+                location.href = '../';
+            }
+            return;
+        }
         const requestedId = params.get('project') || '';
         const last = localStorage.getItem('desi:lastProjectId');
         let opened = false;
@@ -8628,6 +8643,177 @@ const App = {
         // session was unlocked with the admin password.
         document.body.classList.toggle('share-admin', session.role === 'admin');
         await this._hydrateSharedProject(session);
+    },
+
+    // Pull a published project from Supabase into the local IndexedDB so a
+    // master on a different PC (or in incognito) can edit it with the full
+    // master toolbar instead of the read-only share recipient flow. Mirrors
+    // the share recipient hydrate path (_hydrateSharedProject) but lands on
+    // a real master project record (no `__share: true`, fresh local id, all
+    // blobs persisted) and returns the new project id for App.init to open.
+    // admin pw is required because the import grants editing rights — the
+    // session_token returned by unlock_project must carry role='admin'.
+    async _importProjectFromServer(slug) {
+        if (!SupabaseClient.configured()) {
+            alert('Supabase が未設定です');
+            return null;
+        }
+        const adminPw = (prompt(
+            '"' + slug + '" を master mode で取り込みます。\n' +
+            'このプロジェクトの admin password を入力してください。',
+            ''
+        ) || '').trim();
+        if (!adminPw) return null;
+
+        let raw;
+        try { raw = await SupabaseClient.unlockProject(slug, adminPw); }
+        catch (e) {
+            console.warn('import unlock_project failed', e);
+            alert('admin password が違うか、プロジェクトが存在しません');
+            return null;
+        }
+        const row = Array.isArray(raw) ? raw[0] : raw;
+        if (!row || !row.token) { alert('token 取得失敗'); return null; }
+        if (row.role !== 'admin') {
+            alert('viewer password では取り込めません。admin password を入力してください\n(admin pw 未設定の公開リンクは "Share view" ボタンで read-only 表示してください)');
+            return null;
+        }
+        const session = { slug, token: row.token, role: 'admin', expiresAt: row.expires_at };
+
+        let doc;
+        try { doc = await SupabaseClient.fetchProjectDoc(session.token); }
+        catch (e) { alert('project doc 取得失敗: ' + (e.message || e)); return null; }
+        if (!doc) { alert('project doc が空です'); return null; }
+
+        // Same-slug Local project? Confirm overwrite. This is rare on a
+        // fresh PC but common on the original PC re-importing to pull
+        // edits from another machine.
+        try {
+            const existing = (await ProjectStorage.listProjects())
+                .find(p => p && p.shareInfo && p.shareInfo.slug === slug);
+            if (existing) {
+                const ok = confirm(
+                    'Local に "' + slug + '" が既に存在します。\n' +
+                    'サーバの内容で上書きしますか? (Cancel: 取り込み中止)\n\n' +
+                    '※ 未 publish のローカル編集は失われます。'
+                );
+                if (!ok) return null;
+                try { await ProjectStorage.deleteProject(existing.id); } catch (e) {}
+            }
+        } catch (e) { console.warn('listProjects during import failed', e); }
+
+        const project = await this._buildLocalProjectFromDoc(slug, doc, session);
+        if (!project) return null;
+        try { await ProjectStorage.putProject(project); }
+        catch (e) { alert('IDB 保存失敗: ' + (e.message || e)); return null; }
+        return project.id;
+    },
+
+    // Build a master-mode project record from a published doc + session.
+    // Mirrors _hydrateSharedProject but fills in shareInfo, omits __share,
+    // and assigns a fresh local id so the result can sit alongside other
+    // master projects in the same IDB.
+    async _buildLocalProjectFromDoc(slug, doc, session) {
+        const docMeta = doc.meta || {};
+        const projectMeta = docMeta.project_meta || {};
+        const project = {
+            id: uid('proj'),
+            displayName: docMeta.display_name || doc.display_name || doc.displayName || slug,
+            anatomyPalette: doc.anatomy_palette || doc.anatomyPalette || {},
+            sections: (doc.sections || []).map(s => ({
+                id: s.client_id || s.id,
+                ordinal: s.ordinal,
+                displayName: s.display_name || s.displayName || ('Section ' + s.ordinal),
+                meta: s.meta || {},
+                images: {},
+                msiSeries: {},
+                msiFiles: {},
+            })),
+            rois: [],
+            roiHidden: {},
+            memo: ensureMemoShape(projectMeta.memo || doc.memo),
+            createdAt: doc.created_at || nowIso(),
+            updatedAt: doc.updated_at || nowIso(),
+            // shareInfo lets a future Publish reuse the same slug without
+            // re-prompting. Passwords are intentionally null on import —
+            // the new master must re-enter them at next publish.
+            shareInfo: {
+                slug,
+                isPublic: false,
+                viewerPassword: null,
+                adminPassword: null,
+                url: location.origin + location.pathname.replace(/[^/]+$/, '') + 'index.html#share=' + encodeURIComponent(slug),
+                publishedAt: doc.updated_at || doc.created_at || nowIso(),
+            },
+        };
+
+        const fetchBlob = async (path) => {
+            const url = SupabaseClient.publicUrl('atlases', path);
+            if (!url) throw new Error('publicUrl returned null for ' + path);
+            let lastErr = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    const resp = await fetch(url);
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' for ' + path);
+                    return await resp.blob();
+                } catch (e) {
+                    lastErr = e;
+                    if (attempt < 2) await new Promise(r => setTimeout(r, 600 * Math.pow(2, attempt)));
+                }
+            }
+            throw lastErr;
+        };
+        const failed = [];
+        for (let i = 0; i < project.sections.length; i++) {
+            const sec = project.sections[i];
+            const sp = (doc.sections[i] && doc.sections[i].storage_paths) || (doc.sections[i] && doc.sections[i].storagePaths) || {};
+            for (const [key, ref] of Object.entries(sp.images || {})) {
+                try {
+                    const blob = await fetchBlob(ref.path);
+                    const blobId = uid('blob');
+                    await ProjectStorage.putBlob({ id: blobId, blob, mime: ref.mime || blob.type, filename: ref.filename || ref.path.split('/').pop() });
+                    sec.images[key] = { blobId, mime: ref.mime || blob.type, filename: ref.filename };
+                } catch (e) {
+                    console.warn('import image fetch failed', key, e);
+                    failed.push({ kind: 'image', key, path: ref.path, error: e });
+                }
+            }
+            for (const [key, ref] of Object.entries(sp.msiSeries || {})) {
+                try {
+                    const blob = await fetchBlob(ref.path);
+                    const blobId = uid('blob');
+                    await ProjectStorage.putBlob({ id: blobId, blob, mime: ref.mime || blob.type, filename: ref.filename || ref.path.split('/').pop() });
+                    sec.msiSeries[key] = Object.assign({}, ref, { blobId });
+                    if (ref.sourceFileId && !sec.msiFiles[ref.sourceFileId]) {
+                        sec.msiFiles[ref.sourceFileId] = { id: ref.sourceFileId, kind: ref.kind, filename: ref.filename, blobId };
+                    }
+                } catch (e) {
+                    console.warn('import msi fetch failed', key, e);
+                    failed.push({ kind: 'msi', key, path: ref.path, error: e });
+                }
+            }
+        }
+        if (failed.length) {
+            const summary = failed.length + ' 件のレイヤーをダウンロードできませんでした (' +
+                failed.slice(0, 3).map(f => f.kind + ':' + f.key).join(', ') +
+                (failed.length > 3 ? ', ...' : '') + ')';
+            showToast(summary, 6000);
+        }
+
+        try {
+            const rois = await SupabaseClient.listRois(session.token);
+            project.rois = (rois || []).map(r => ({
+                id: r.id,
+                colorKey: r.color_key,
+                name: r.name,
+                rgba: r.rgba || [255, 0, 0, 200],
+                polysBySection: r.polys_by_section || {},
+                version: r.version,
+                serverId: r.id,
+            }));
+        } catch (e) { console.warn('import ROI fetch failed', e); }
+
+        return project;
     },
 
     async _hydrateSharedProject(session) {
@@ -9288,6 +9474,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-07-r5</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-07-r6</div>
 </body>
 </html>
