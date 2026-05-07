@@ -1889,9 +1889,9 @@ class SectionPanel {
     }
 
     getMsiRefSize() {
-        const msiKeys = Object.keys(this.imageSources).filter(k => /^MSI_/i.test(k));
-        if (msiKeys.length) {
-            const r = this.imageSources[msiKeys[0]];
+        const refKey = this._pickRefMsiKey();
+        if (refKey) {
+            const r = this.imageSources[refKey];
             if (r && r.naturalWidth > 0) return { w: r.naturalWidth, h: r.naturalHeight };
         }
         const heKeys = Object.keys(this.imageSources).filter(k => /HE_STAIN|IF_STAIN/i.test(k));
@@ -1902,9 +1902,43 @@ class SectionPanel {
         return { w: this.dom.cdisp.width, h: this.dom.cdisp.height };
     }
 
+    // Pick the MSI layer that anchors cdisp sizing + T_he_to_msi lookup.
+    // Compound mode → the focus compound (so cdisp re-sizes when the user
+    // switches between compounds from different source files). Otherwise
+    // fall back to the first registered MSI which preserves Free-mode
+    // behavior.
+    _pickRefMsiKey() {
+        if (typeof App !== 'undefined' && App && App.viewMode === 'compound'
+            && App.focusCompoundKey
+            && this.imageSources[App.focusCompoundKey]
+            && /^MSI_/i.test(App.focusCompoundKey)) {
+            return App.focusCompoundKey;
+        }
+        return Object.keys(this.imageSources).find(k => /^MSI_/i.test(k)) || null;
+    }
+
+    _refSourceFileId() {
+        const refKey = this._pickRefMsiKey();
+        if (!refKey) return null;
+        const ent = this.section.msiSeries && this.section.msiSeries[refKey];
+        return (ent && ent.sourceFileId) || null;
+    }
+
+    // Resolve T_he_to_msi for the current ref MSI source. Falls back to
+    // the legacy single T_he_to_msi when the per-source override isn't
+    // set yet (existing projects, or sources the user hasn't aligned
+    // yet).
+    _resolveTHeToMsi() {
+        const wc = (this.section.meta && this.section.meta.world_coords) || {};
+        const fid = this._refSourceFileId();
+        const bySource = wc.T_he_to_msi_by_source || {};
+        if (fid && bySource[fid]) return bySource[fid];
+        return wc.T_he_to_msi || null;
+    }
+
     // ---- Canvas sizing ----
     setupCanvasSize() {
-        const msiKey = Object.keys(this.imageSources).find(k => /^MSI_/i.test(k));
+        const msiKey = this._pickRefMsiKey();
         const heKey  = Object.keys(this.imageSources).find(k => /HE_STAIN|IF_STAIN/i.test(k));
         const refKey = msiKey || heKey || Object.keys(this.imageSources)[0];
         if (!refKey) return;
@@ -1962,7 +1996,7 @@ class SectionPanel {
         if (!ctx || this.dom.cdisp.width === 0) return;
         this._maybeWarnRasterDimMismatch();
         ctx.clearRect(0, 0, this.dom.cdisp.width, this.dom.cdisp.height);
-        const T = this.section.meta && this.section.meta.world_coords && this.section.meta.world_coords.T_he_to_msi;
+        const T = this._resolveTHeToMsi();
         // Mirrors setupCanvasSize's refIsMsi: any MSI layer registered means
         // cdisp is sized to (msi.natH, msi.natW) × upscale, so HE must be
         // routed through the rotate-into-MSI-frame T-branch regardless of HE
@@ -7785,7 +7819,15 @@ const App = {
         this.focusCompoundKey = key || null;
         try { localStorage.setItem('desi:focusCompoundKey', this.focusCompoundKey || ''); } catch (e) {}
         for (const p of this.panels.values()) {
-            try { p.renderComposite(); } catch (e) {}
+            try {
+                // Re-pick ref MSI / cdisp size because the new focus may
+                // live in a different source file with a different raster
+                // grid (per-source T_he_to_msi). Without this the canvas
+                // would stay sized for the previous focus and the per-
+                // source T would be applied to a mismatched cdisp.
+                p.setupCanvasSize();
+                p.renderComposite();
+            } catch (e) {}
         }
         renderMethodTable();
         Toolbar.refreshAll();
