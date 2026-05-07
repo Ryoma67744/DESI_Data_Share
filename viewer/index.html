@@ -51,6 +51,8 @@ body.share-mode #tb-del-section { display:none !important; }
 body.share-mode #share-mode-banner { display:flex !important; }
 body.share-mode .picker-row .picker-row-dot,
 body.share-mode .picker-row .picker-row-rename { display:none !important; }
+body.share-mode #method-rows td[data-compound-cell] { cursor:default; }
+body:not(.share-mode) #method-rows td[data-compound-cell] { cursor:text; }
 #share-mode-banner { display:none; align-items:center; gap:6px; padding:2px 8px; background:#dbeafe; color:#1d4ed8; font-size:11px; border-radius:3px; margin-right:6px; }
 .modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:60; display:flex; align-items:center; justify-content:center; }
 .modal-card { background:#fff; border-radius:8px; box-shadow:0 12px 30px rgba(0,0,0,0.2); padding:18px; width:480px; max-width:92vw; max-height:88vh; overflow-y:auto; }
@@ -3770,7 +3772,7 @@ function renderMethodTable() {
                 '<button type="button" class="marker-swatch" title="Set marker colour" style="' + markerSwatchStyle + '"></button>' +
                 '<input type="color" class="marker-input" value="' + (markerColor || '#ff0000') + '" tabindex="-1">' +
             '</td>' +
-            '<td class="px-2 py-1 border-b border-gray-100 text-gray-700 font-mono text-[11px]" title="' + safe(formatDisplayName(layerKey)) + '">' + safe(compoundName) + '</td>' +
+            '<td class="px-2 py-1 border-b border-gray-100 text-gray-700 font-mono text-[11px]" data-compound-cell="' + safe(layerKey) + '" title="ダブルクリックで rename (master only)">' + safe(compoundName) + '</td>' +
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(pre) + '</td>' +
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(pro) + '</td>' +
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(ce) + '</td>' +
@@ -3818,6 +3820,26 @@ function renderMethodTable() {
             const p = App.activeSectionId ? App.panels.get(App.activeSectionId) : null;
             if (p) p.handleLayerClick(layerKey, ev);
         });
+
+        // Master-only inline rename. Share-mode hides the dblclick path via
+        // CSS cursor + early-return below; in master we prompt for the new
+        // base name (CE/CV will be re-derived from the trailing _<int>_<int>
+        // pattern by splitCeCv).
+        const compoundCell = tr.querySelector('[data-compound-cell]');
+        if (compoundCell) {
+            compoundCell.addEventListener('dblclick', (ev) => {
+                ev.preventDefault(); ev.stopPropagation();
+                if (document.body.classList.contains('share-mode')) return;
+                const ent = panel.section.msiSeries && panel.section.msiSeries[layerKey];
+                const meta = ent && ent.compoundMeta;
+                const cur = (meta && (meta.name || meta.base)) || formatDisplayName(layerKey);
+                const next = prompt('新しいコンパウンド名 (CE/CV を含めるなら "Foo_45_14" の形)', cur);
+                if (next == null) return;
+                const trimmed = String(next).trim();
+                if (!trimmed || trimmed === cur) return;
+                App.renameCompound(layerKey, trimmed);
+            });
+        }
 
         tbody.appendChild(tr);
     }
@@ -7717,6 +7739,87 @@ const App = {
         }
         renderMethodTable();
         Toolbar.refreshAll();
+    },
+
+    // Rename a compound across the whole project. Touches every place a
+    // compound is keyed by `MSI_<base>` so the new name is reflected in
+    // both the runtime UI and the persisted IndexedDB record. The Storage
+    // path inside `storagePaths` is left intact because object names are
+    // built from blobId / filename, not the layerKey (publish helper at
+    // viewer/index.html:5451). The user must re-publish to push the
+    // updated compound name to share recipients.
+    async renameCompound(oldKey, newBase) {
+        if (!this.project) return;
+        if (!/^MSI_/i.test(oldKey)) return;
+        const cleanBase = String(newBase || '').trim();
+        if (!cleanBase) return;
+        const newKey = 'MSI_' + sanitizeCompoundName(cleanBase);
+        if (newKey === oldKey) return;
+
+        // Conflict check across all sections — never silently merge two
+        // distinct compounds even if they happen to share a section.
+        for (const s of this.project.sections) {
+            const series = s.msiSeries || {};
+            if (series[newKey] && series[newKey] !== series[oldKey]) {
+                showToast('既に "' + cleanBase + '" という名前のコンパウンドが存在します');
+                return;
+            }
+        }
+
+        const split = splitCeCv(cleanBase);
+        for (const s of this.project.sections) {
+            if (!s.msiSeries || !s.msiSeries[oldKey]) continue;
+            const ent = s.msiSeries[oldKey];
+            if (ent.compoundMeta) {
+                ent.compoundMeta.base = split.base;
+                ent.compoundMeta.name = cleanBase;
+                if (split.ce != null) ent.compoundMeta.ce = split.ce;
+                if (split.cv != null) ent.compoundMeta.cv = split.cv;
+            }
+            s.msiSeries[newKey] = ent;
+            delete s.msiSeries[oldKey];
+            if (s.meta && Array.isArray(s.meta.visibleLayers)) {
+                s.meta.visibleLayers = s.meta.visibleLayers.map(k => k === oldKey ? newKey : k);
+            }
+            if (s.storagePaths && s.storagePaths.msiSeries && s.storagePaths.msiSeries[oldKey]) {
+                s.storagePaths.msiSeries[newKey] = s.storagePaths.msiSeries[oldKey];
+                delete s.storagePaths.msiSeries[oldKey];
+            }
+        }
+
+        // Per-panel runtime caches (decoded image + tone-mapping settings)
+        // live outside the persisted project record. Migrate the keys so
+        // the next renderComposite doesn't re-fetch / lose state.
+        for (const panel of this.panels.values()) {
+            if (panel.imageSources && panel.imageSources[oldKey]) {
+                panel.imageSources[newKey] = panel.imageSources[oldKey];
+                delete panel.imageSources[oldKey];
+            }
+            if (panel.imageSettings && panel.imageSettings[oldKey]) {
+                panel.imageSettings[newKey] = panel.imageSettings[oldKey];
+                delete panel.imageSettings[oldKey];
+            }
+            if (panel.visibleLayers && panel.visibleLayers.has(oldKey)) {
+                panel.visibleLayers.delete(oldKey);
+                panel.visibleLayers.add(newKey);
+            }
+        }
+
+        if (this.focusCompoundKey === oldKey) {
+            this.setFocusCompoundKey(newKey);
+        }
+
+        for (const p of this.panels.values()) {
+            try {
+                p.refreshLayerBar && p.refreshLayerBar();
+                p.populateThumbnails && p.populateThumbnails();
+                p.renderComposite();
+            } catch (e) {}
+        }
+        renderMethodTable();
+        Toolbar.refreshAll();
+        this.queueSave();
+        showToast('コンパウンド名を "' + cleanBase + '" に変更しました。share に反映するには再 publish してください。', 5000);
     },
 
     refreshViewModeUI() {
