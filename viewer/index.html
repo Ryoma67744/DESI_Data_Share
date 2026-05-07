@@ -234,15 +234,11 @@ body.splitting-v { cursor:row-resize !important; }
     min-height:0;
     overflow-y:auto !important;
 }
-/* In share mode, hide MSI machine-parameter columns (Precursor / Fragment /
-   CE / CV) from non-admin viewers. Master and admin (logged in via the
-   admin password) keep the full table. */
-body.share-mode:not(.share-admin) #method-table thead th:nth-child(3),
-body.share-mode:not(.share-admin) #method-table thead th:nth-child(4),
+/* In share mode, hide CE / CV columns from non-admin viewers. Master and
+   admin (logged in via the admin password) keep the full table. Precursor
+   / Fragment stay visible to viewers / public-link recipients. */
 body.share-mode:not(.share-admin) #method-table thead th:nth-child(5),
 body.share-mode:not(.share-admin) #method-table thead th:nth-child(6),
-body.share-mode:not(.share-admin) #method-rows tr > td:nth-child(3),
-body.share-mode:not(.share-admin) #method-rows tr > td:nth-child(4),
 body.share-mode:not(.share-admin) #method-rows tr > td:nth-child(5),
 body.share-mode:not(.share-admin) #method-rows tr > td:nth-child(6) { display:none !important; }
 /* In share mode, hide the per-file "delete" action regardless of admin
@@ -3999,7 +3995,7 @@ function openAdminLoginModal(slug) {
         <form>
           <p style="font-size:11px;color:#475569;margin-bottom:6px;">
             <code>${safeSlug}</code> の admin password を入力してください。<br>
-            管理者として認証されると Method (MRM) の Precursor / Product / CV / CE が見えるようになります。
+            管理者として認証されると Method (MRM) の CV / CE が追加で見えるようになります。
           </p>
           <label>Admin password
             <input type="password" name="pw" required autocomplete="current-password">
@@ -5566,7 +5562,7 @@ async function openPublishMetaModal(project) {
           <p style="font-size:11px;color:#475569;">
             ※ 同じ slug で再 publish するとサーバ側のプロジェクトは丸ごと上書きされます (公開フラグも含む)。<br>
             ※ 公開リンクは share URL を知っている人なら誰でも閲覧できます。<br>
-            ※ Admin password で開いた閲覧者は Method (MRM) の Precursor / Fragment / CE / CV まで見えます。Viewer password / 公開リンクだとこれらは隠れます。
+            ※ Admin password で開いた閲覧者は Method (MRM) の CE / CV まで見えます。Viewer password / 公開リンクだと CE / CV は隠れます (Precursor / Fragment は誰でも見えます)。
           </p>
           <p data-err style="color:#b91c1c;font-size:11px;min-height:14px;"></p>
           <div class="modal-actions">
@@ -6517,9 +6513,12 @@ const SharePreview = {
         const body = this.overlay.querySelector('[data-method-body]');
         if (!head || !body) return;
         const isAdmin = this.role === 'admin';
+        // Non-admin viewers see Compound + Precursor + Product (matches the
+        // main Method panel, which now only hides CE/CV from share-mode
+        // viewers). CV / CE remain admin-only.
         const cols = isAdmin
             ? ['Compound', 'Precursor', 'Product', 'CV', 'CE']
-            : ['Compound'];
+            : ['Compound', 'Precursor', 'Product'];
         head.innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>';
 
         const rows = this.compoundKeys.map(key => {
@@ -6530,15 +6529,18 @@ const SharePreview = {
             }
             const base = (meta && meta.base) || formatDisplayName(key);
             const safe = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+            const compoundTd = `<td class="compound-cell">${safe(base)}</td>`;
+            const precursorTd = `<td>${meta && meta.precursor != null ? safe(meta.precursor) : '—'}</td>`;
+            const productTd = `<td>${meta && meta.product != null ? safe(meta.product) : '—'}</td>`;
             const tds = isAdmin
                 ? [
-                    `<td class="compound-cell">${safe(base)}</td>`,
-                    `<td>${meta && meta.precursor != null ? safe(meta.precursor) : '—'}</td>`,
-                    `<td>${meta && meta.product != null ? safe(meta.product) : '—'}</td>`,
+                    compoundTd,
+                    precursorTd,
+                    productTd,
                     `<td>${meta && meta.cv != null ? safe(meta.cv) : '—'}</td>`,
                     `<td>${meta && meta.ce != null ? safe(meta.ce) : '—'}</td>`,
                   ]
-                : [`<td class="compound-cell">${safe(base)}</td>`];
+                : [compoundTd, precursorTd, productTd];
             return `<tr data-key="${safe(key)}">${tds.join('')}</tr>`;
         });
         body.innerHTML = rows.join('');
