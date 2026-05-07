@@ -4752,44 +4752,100 @@ const Wizards = {
         // compounds belonging to the chosen source, swaps slider state to
         // that source's bySource entry, and (in __all__ mode) makes the
         // next Save broadcast T to every source.
+        // Capture / apply helpers — used so each source dropdown change
+        // *preserves* the user's in-progress edits for the outgoing source
+        // (otherwise switching back would silently lose them) and *loads*
+        // the incoming source's saved record so HE / MSI landmarks reflect
+        // that source.
+        const captureSliderState = () => ({
+            flip_lr: state.flip_lr, flip_ud: state.flip_ud,
+            scale_pct: state.scale_pct, rotate_deg: state.rotate_deg,
+            offx: state.offx, offy: state.offy,
+            landmarks: { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() },
+        });
+        const applyToState = (src) => {
+            if (!src) return false;
+            state.flip_lr = !!src.flip_lr;
+            state.flip_ud = !!src.flip_ud;
+            if (Number.isFinite(src.scale_pct))  state.scale_pct  = src.scale_pct;
+            if (Number.isFinite(src.rotate_deg)) state.rotate_deg = src.rotate_deg;
+            if (Number.isFinite(src.offx))       state.offx       = src.offx;
+            if (Number.isFinite(src.offy))       state.offy       = src.offy;
+            if (src.landmarks) {
+                state.landmarks.he  = src.landmarks.he  ? src.landmarks.he.slice()  : [];
+                state.landmarks.msi = src.landmarks.msi ? src.landmarks.msi.slice() : [];
+            }
+            return true;
+        };
+        const applyLegacyTopLevel = () => {
+            const legacy = loadStateFor(state.layerKey);
+            state.flip_lr = legacy.flip_lr; state.flip_ud = legacy.flip_ud;
+            state.scale_pct = legacy.scale_pct; state.rotate_deg = legacy.rotate_deg;
+            state.offx = legacy.offx; state.offy = legacy.offy;
+            state.landmarks = legacy.landmarks;
+        };
+        const persistSliderStateToSource = (mode) => {
+            if (!mode) return;
+            const aRef = sec.meta.alignment[state.layerKey] = sec.meta.alignment[state.layerKey] || {};
+            aRef.bySource = aRef.bySource || {};
+            const snap = captureSliderState();
+            if (mode === '__all__') {
+                for (const fid of sourceFids) aRef.bySource[fid] = snap;
+            } else {
+                aRef.bySource[mode] = snap;
+            }
+        };
+
         if (sourceSel) sourceSel.addEventListener('change', () => {
             const next = sourceSel.value;
-            if (!next) return;
+            if (!next || next === state.sourceMode) return;
+            const prevMode = state.sourceMode;
+            // 1. Persist the user's current edits (sliders + landmarks) to
+            //    the OUTGOING source's in-memory bySource entry. Without
+            //    this, switching to another source and then coming back
+            //    would silently discard whatever the user just adjusted.
+            persistSliderStateToSource(prevMode);
+
             state.sourceMode = next;
-            // Rebuild the MSI dropdown for the new source.
-            const newOpts = buildMsiOpts(next);
-            msiSel.innerHTML = newOpts;
-            // Pick a representative MSI: keep the current pick if it still
-            // belongs to the new source, otherwise default to the first
-            // compound now visible (or synthetic TIC in __all__ mode).
+
+            // 2. Rebuild the MSI dropdown for the new source.
+            msiSel.innerHTML = buildMsiOpts(next);
             const filtered = compoundsForMode(next);
             const canKeepCurrent = state.msiKey === '__TIC__'
                 ? (next === '__all__' && offerSyntheticTic)
                 : filtered.includes(state.msiKey);
             if (!canKeepCurrent) {
-                state.msiKey = (next === '__all__' && offerSyntheticTic && (!filtered.length || !state.msiKey))
+                state.msiKey = (next === '__all__' && offerSyntheticTic && !filtered.length)
                     ? '__TIC__'
                     : (filtered[0] || (offerSyntheticTic ? '__TIC__' : null));
-                msiSel.value = state.msiKey || '';
-                overrideStateFromSource(state, state.layerKey, fidOf(state.msiKey));
-                syncUiFromState();
-                if (state.msiKey && state.msiKey !== '__TIC__'
-                    && App && App.viewMode === 'compound') {
-                    try { App.setFocusCompoundKey(state.msiKey); }
-                    catch (er) { console.warn('setFocusCompoundKey from align modal (source change) failed', er); }
-                }
-            } else {
-                msiSel.value = state.msiKey || '';
-                // Reload slider state from the matching bySource entry — when
-                // single-source mode is selected, we want the saved alignment
-                // for that specific source even if the MSI key didn't change.
-                if (next !== '__all__') {
-                    overrideStateFromSource(state, state.layerKey, next);
-                    syncUiFromState();
-                }
             }
-            // Persist the source-mode choice so reopening the modal lands on
-            // the same context.
+            msiSel.value = state.msiKey || '';
+
+            // 3. Load the INCOMING source's saved record. In __all__ mode
+            //    the legacy top-level fields are the canonical "shared T"
+            //    representation. In single-source mode prefer the matching
+            //    bySource entry, falling back to legacy when this source
+            //    has never been aligned (HE / MSI landmarks reset to the
+            //    last-saved baseline so the user starts fresh rather than
+            //    inheriting another source's points).
+            const aRef = sec.meta.alignment[state.layerKey] || {};
+            let loaded = false;
+            if (next === '__all__') {
+                applyLegacyTopLevel();
+                loaded = true;
+            } else {
+                loaded = applyToState(aRef.bySource && aRef.bySource[next]);
+                if (!loaded) applyLegacyTopLevel();
+            }
+
+            syncUiFromState();
+            // Sync background panel focus so the live preview paints the
+            // correct compound for the new source.
+            if (state.msiKey && state.msiKey !== '__TIC__'
+                && App && App.viewMode === 'compound') {
+                try { App.setFocusCompoundKey(state.msiKey); }
+                catch (er) { console.warn('setFocusCompoundKey from align modal (source change) failed', er); }
+            }
             sec.meta.alignmentSourceMode = state.sourceMode;
             writeWorldCoords();
             populateThumbs();
@@ -9134,6 +9190,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-07-r3</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-07-r4</div>
 </body>
 </html>
