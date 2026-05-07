@@ -51,6 +51,13 @@ body.share-mode #tb-del-section { display:none !important; }
 body.share-mode #share-mode-banner { display:flex !important; }
 body.share-mode .picker-row .picker-row-dot,
 body.share-mode .picker-row .picker-row-rename { display:none !important; }
+body.share-mode #method-rows td[data-compound-cell] { cursor:default; }
+body:not(.share-mode) #method-rows td[data-compound-cell] { cursor:text; }
+/* Admin login button — only visible to share-mode viewers who haven't
+   yet elevated. Mirrors the gating used by the preview-overlay button
+   (CSS rule at line 295) so the visibility model is consistent. */
+#btn-share-admin-login { display:none; }
+body.share-mode:not(.share-admin) #btn-share-admin-login { display:inline-flex; align-items:center; gap:4px; }
 #share-mode-banner { display:none; align-items:center; gap:6px; padding:2px 8px; background:#dbeafe; color:#1d4ed8; font-size:11px; border-radius:3px; margin-right:6px; }
 .modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:60; display:flex; align-items:center; justify-content:center; }
 .modal-card { background:#fff; border-radius:8px; box-shadow:0 12px 30px rgba(0,0,0,0.2); padding:18px; width:480px; max-width:92vw; max-height:88vh; overflow-y:auto; }
@@ -442,6 +449,9 @@ body.share-mode #btn-share-preview { display:inline-flex; }
             <div id="share-mode-banner" title="Read-only Share mode. ROI editing requires acquiring an exclusive lock.">
                 <span>🔒</span><span>Share view</span>
             </div>
+            <button type="button" id="btn-share-admin-login" class="btn" title="Admin password でログインして Method (MRM) の CE/CV を表示する">
+                <span>🔑</span><span>Admin</span>
+            </button>
             <button type="button" id="btn-share-preview" title="Open the simplified compound comparison preview">
                 <span>📊</span><span>Preview</span>
             </button>
@@ -1847,10 +1857,39 @@ class SectionPanel {
         }
     }
 
+    // One-time per-panel warning for genuinely anomalous MSI rasters.
+    // Cross-source dimension differences are now handled by per-source
+    // T_he_to_msi (see _resolveTHeToMsi), so we only warn when *the same*
+    // source file produced rasters with different sizes — that's a real
+    // import / decoding anomaly rather than a known multi-source case.
+    _maybeWarnRasterDimMismatch() {
+        if (this._dimMismatchWarned) return;
+        const bySource = new Map();
+        for (const [k, v] of Object.entries(this.imageSources)) {
+            if (!/^MSI_/i.test(k) || !v || !v.naturalWidth) continue;
+            const ent = this.section.msiSeries && this.section.msiSeries[k];
+            const fid = (ent && ent.sourceFileId) || '__legacy__';
+            if (!bySource.has(fid)) bySource.set(fid, []);
+            bySource.get(fid).push({ k, w: v.naturalWidth, h: v.naturalHeight });
+        }
+        for (const [fid, list] of bySource) {
+            if (list.length < 2) continue;
+            const refW = list[0].w, refH = list[0].h;
+            if (list.some(it => it.w !== refW || it.h !== refH)) {
+                this._dimMismatchWarned = true;
+                console.warn('[align] intra-source MSI raster dim mismatch', fid, list);
+                if (typeof showToast === 'function') {
+                    showToast('同じ MSI ソースファイル内で raster サイズが揃っていません — 取り込みデータが破損している可能性があります。', 7000);
+                }
+                return;
+            }
+        }
+    }
+
     getMsiRefSize() {
-        const msiKeys = Object.keys(this.imageSources).filter(k => /^MSI_/i.test(k));
-        if (msiKeys.length) {
-            const r = this.imageSources[msiKeys[0]];
+        const refKey = this._pickRefMsiKey();
+        if (refKey) {
+            const r = this.imageSources[refKey];
             if (r && r.naturalWidth > 0) return { w: r.naturalWidth, h: r.naturalHeight };
         }
         const heKeys = Object.keys(this.imageSources).filter(k => /HE_STAIN|IF_STAIN/i.test(k));
@@ -1861,9 +1900,43 @@ class SectionPanel {
         return { w: this.dom.cdisp.width, h: this.dom.cdisp.height };
     }
 
+    // Pick the MSI layer that anchors cdisp sizing + T_he_to_msi lookup.
+    // Compound mode → the focus compound (so cdisp re-sizes when the user
+    // switches between compounds from different source files). Otherwise
+    // fall back to the first registered MSI which preserves Free-mode
+    // behavior.
+    _pickRefMsiKey() {
+        if (typeof App !== 'undefined' && App && App.viewMode === 'compound'
+            && App.focusCompoundKey
+            && this.imageSources[App.focusCompoundKey]
+            && /^MSI_/i.test(App.focusCompoundKey)) {
+            return App.focusCompoundKey;
+        }
+        return Object.keys(this.imageSources).find(k => /^MSI_/i.test(k)) || null;
+    }
+
+    _refSourceFileId() {
+        const refKey = this._pickRefMsiKey();
+        if (!refKey) return null;
+        const ent = this.section.msiSeries && this.section.msiSeries[refKey];
+        return (ent && ent.sourceFileId) || null;
+    }
+
+    // Resolve T_he_to_msi for the current ref MSI source. Falls back to
+    // the legacy single T_he_to_msi when the per-source override isn't
+    // set yet (existing projects, or sources the user hasn't aligned
+    // yet).
+    _resolveTHeToMsi() {
+        const wc = (this.section.meta && this.section.meta.world_coords) || {};
+        const fid = this._refSourceFileId();
+        const bySource = wc.T_he_to_msi_by_source || {};
+        if (fid && bySource[fid]) return bySource[fid];
+        return wc.T_he_to_msi || null;
+    }
+
     // ---- Canvas sizing ----
     setupCanvasSize() {
-        const msiKey = Object.keys(this.imageSources).find(k => /^MSI_/i.test(k));
+        const msiKey = this._pickRefMsiKey();
         const heKey  = Object.keys(this.imageSources).find(k => /HE_STAIN|IF_STAIN/i.test(k));
         const refKey = msiKey || heKey || Object.keys(this.imageSources)[0];
         if (!refKey) return;
@@ -1906,11 +1979,21 @@ class SectionPanel {
     }
 
     // ---- Composite renderer ----
+    // Per-source alignment: cdisp is sized to the focus compound's source
+    // raster (Compound mode) or the first MSI (Free mode), and the HE→MSI
+    // affine is looked up via _resolveTHeToMsi which prefers
+    // section.meta.world_coords.T_he_to_msi_by_source[fid] before falling
+    // back to the legacy single-T field. App.setFocusCompoundKey re-runs
+    // setupCanvasSize so a focus switch between sources triggers a fresh
+    // canvas + T pair. _maybeWarnRasterDimMismatch now only fires for
+    // intra-source anomalies (multi-source size differences are handled
+    // structurally above).
     renderComposite() {
         const ctx = this.displayCtx;
         if (!ctx || this.dom.cdisp.width === 0) return;
+        this._maybeWarnRasterDimMismatch();
         ctx.clearRect(0, 0, this.dom.cdisp.width, this.dom.cdisp.height);
-        const T = this.section.meta && this.section.meta.world_coords && this.section.meta.world_coords.T_he_to_msi;
+        const T = this._resolveTHeToMsi();
         // Mirrors setupCanvasSize's refIsMsi: any MSI layer registered means
         // cdisp is sized to (msi.natH, msi.natW) × upscale, so HE must be
         // routed through the rotate-into-MSI-frame T-branch regardless of HE
@@ -3770,7 +3853,7 @@ function renderMethodTable() {
                 '<button type="button" class="marker-swatch" title="Set marker colour" style="' + markerSwatchStyle + '"></button>' +
                 '<input type="color" class="marker-input" value="' + (markerColor || '#ff0000') + '" tabindex="-1">' +
             '</td>' +
-            '<td class="px-2 py-1 border-b border-gray-100 text-gray-700 font-mono text-[11px]" title="' + safe(formatDisplayName(layerKey)) + '">' + safe(compoundName) + '</td>' +
+            '<td class="px-2 py-1 border-b border-gray-100 text-gray-700 font-mono text-[11px]" data-compound-cell="' + safe(layerKey) + '" title="ダブルクリックで rename (master only)">' + safe(compoundName) + '</td>' +
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(pre) + '</td>' +
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(pro) + '</td>' +
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(ce) + '</td>' +
@@ -3818,6 +3901,26 @@ function renderMethodTable() {
             const p = App.activeSectionId ? App.panels.get(App.activeSectionId) : null;
             if (p) p.handleLayerClick(layerKey, ev);
         });
+
+        // Master-only inline rename. Share-mode hides the dblclick path via
+        // CSS cursor + early-return below; in master we prompt for the new
+        // base name (CE/CV will be re-derived from the trailing _<int>_<int>
+        // pattern by splitCeCv).
+        const compoundCell = tr.querySelector('[data-compound-cell]');
+        if (compoundCell) {
+            compoundCell.addEventListener('dblclick', (ev) => {
+                ev.preventDefault(); ev.stopPropagation();
+                if (document.body.classList.contains('share-mode')) return;
+                const ent = panel.section.msiSeries && panel.section.msiSeries[layerKey];
+                const meta = ent && ent.compoundMeta;
+                const cur = (meta && (meta.name || meta.base)) || formatDisplayName(layerKey);
+                const next = prompt('新しいコンパウンド名 (CE/CV を含めるなら "Foo_45_14" の形)', cur);
+                if (next == null) return;
+                const trimmed = String(next).trim();
+                if (!trimmed || trimmed === cur) return;
+                App.renameCompound(layerKey, trimmed);
+            });
+        }
 
         tbody.appendChild(tr);
     }
@@ -4182,18 +4285,32 @@ const Wizards = {
         // ---- Snapshot for Cancel --------------------------------------------
         sec.meta = sec.meta || {};
         sec.meta.world_coords = sec.meta.world_coords || {};
+        sec.meta.alignment = sec.meta.alignment || {};
         const initial = {
-            T:      sec.meta.world_coords.T_he_to_msi
-                        ? JSON.parse(JSON.stringify(sec.meta.world_coords.T_he_to_msi))
-                        : null,
-            msi_um: sec.meta.world_coords.msi_um_per_px
-                        ? JSON.parse(JSON.stringify(sec.meta.world_coords.msi_um_per_px))
-                        : null,
+            T:        sec.meta.world_coords.T_he_to_msi
+                          ? JSON.parse(JSON.stringify(sec.meta.world_coords.T_he_to_msi))
+                          : null,
+            T_by_src: sec.meta.world_coords.T_he_to_msi_by_source
+                          ? JSON.parse(JSON.stringify(sec.meta.world_coords.T_he_to_msi_by_source))
+                          : null,
+            msi_um:   sec.meta.world_coords.msi_um_per_px
+                          ? JSON.parse(JSON.stringify(sec.meta.world_coords.msi_um_per_px))
+                          : null,
+            // Snapshot the entire per-HE-layer alignment record so per-source
+            // bySource entries survive a Cancel even when the user toggled
+            // between sources during the session.
+            alignment: JSON.parse(JSON.stringify(sec.meta.alignment || {})),
         };
 
         // ---- State -----------------------------------------------------------
-        sec.meta.alignment = sec.meta.alignment || {};
         const layerKey = heKeys[0];
+        // Helper: source file id of an MSI compound key, or null for
+        // synthetic TIC / unknown.
+        const fidOf = (msiKey) => {
+            if (!msiKey || msiKey === '__TIC__') return null;
+            const ent = sec.msiSeries && sec.msiSeries[msiKey];
+            return (ent && ent.sourceFileId) || null;
+        };
         const loadStateFor = (key) => {
             const a = sec.meta.alignment[key] || {};
             return {
@@ -4208,6 +4325,27 @@ const Wizards = {
                               msi: (a.landmarks && a.landmarks.msi ? a.landmarks.msi.slice() : []) },
                 pickMode:   'none',
             };
+        };
+        // When the user picks an MSI compound from a source that already has
+        // its own slider state stored, swap that in over the legacy top-level
+        // values. Falls through silently for sources the user hasn't aligned
+        // yet (first-time alignment of a new source uses the legacy values
+        // as starting point).
+        const overrideStateFromSource = (st, heKey, fid) => {
+            if (!fid) return;
+            const a = sec.meta.alignment[heKey] || {};
+            const bySrc = (a.bySource && a.bySource[fid]) || null;
+            if (!bySrc) return;
+            st.flip_lr = !!bySrc.flip_lr;
+            st.flip_ud = !!bySrc.flip_ud;
+            if (Number.isFinite(bySrc.scale_pct))  st.scale_pct  = bySrc.scale_pct;
+            if (Number.isFinite(bySrc.rotate_deg)) st.rotate_deg = bySrc.rotate_deg;
+            if (Number.isFinite(bySrc.offx))       st.offx       = bySrc.offx;
+            if (Number.isFinite(bySrc.offy))       st.offy       = bySrc.offy;
+            if (bySrc.landmarks) {
+                st.landmarks.he  = bySrc.landmarks.he  ? bySrc.landmarks.he.slice()  : [];
+                st.landmarks.msi = bySrc.landmarks.msi ? bySrc.landmarks.msi.slice() : [];
+            }
         };
         const state = loadStateFor(layerKey);
         const msiUm = sec.meta.world_coords.msi_um_per_px || { x: 50, y: 50 };
@@ -4231,6 +4369,10 @@ const Wizards = {
                         || (offerSyntheticTic ? '__TIC__' : null)
                         || allMsiKeys[0]
                         || null);
+        // Pre-populate sliders from per-source state when the chosen MSI
+        // belongs to a source the user has already aligned in a previous
+        // session.
+        overrideStateFromSource(state, state.layerKey, fidOf(state.msiKey));
 
         // ---- Modal HTML ------------------------------------------------------
         const layerOpts = heKeys.map(k => `<option value="${safe(k)}"${k===state.layerKey?' selected':''}>${safe(k)}</option>`).join('');
@@ -4254,7 +4396,8 @@ const Wizards = {
               </div>
             </div>
             <p style="font-size:11px;color:#475569;margin-top:0;">
-              スライダーまたは対応点クリックで HE/IF を MSI に重ねます。背後の Section パネルでリアルタイムにプレビューされます。
+              スライダーまたは対応点クリックで HE/IF を MSI に重ねます。背後の Section パネルでリアルタイムにプレビューされます。<br>
+              <span style="color:#64748b;">※ 位置合わせは選択した MSI のソースファイル (.xlsx / .txt) ごとに保存されます。同じソース由来の他 compound も自動で同じ T を使うので、ソースが複数あるときはそれぞれ 1 回ずつ位置合わせしてください。</span>
             </p>
 
             <fieldset style="margin-top:8px;border:1px solid #e2e8f0;border-radius:5px;padding:8px 10px;">
@@ -4369,7 +4512,22 @@ const Wizards = {
         let rafId = 0;
         const writeWorldCoords = () => {
             sec.meta.world_coords = sec.meta.world_coords || {};
-            sec.meta.world_coords.T_he_to_msi = buildHeToMsiAffine(state);
+            const T = buildHeToMsiAffine(state);
+            // Always keep the legacy single-T field updated so old viewers
+            // (and the fallback path in _resolveTHeToMsi) still see something
+            // sensible.
+            sec.meta.world_coords.T_he_to_msi = T;
+            // New: also stamp the per-source override for the MSI compound
+            // currently selected in the modal. Synthetic TIC has no
+            // sourceFileId — it's a cross-source visual aid only — so we
+            // skip writing per-source there and let the legacy field carry
+            // the user's intent.
+            const fid = fidOf(state.msiKey);
+            if (fid) {
+                sec.meta.world_coords.T_he_to_msi_by_source =
+                    sec.meta.world_coords.T_he_to_msi_by_source || {};
+                sec.meta.world_coords.T_he_to_msi_by_source[fid] = T;
+            }
             sec.meta.world_coords.msi_um_per_px = { x: state.msi_um_x, y: state.msi_um_y };
             if (state.msiKey) sec.meta.alignmentMsiKey = state.msiKey;
         };
@@ -4424,18 +4582,25 @@ const Wizards = {
         layerSel.addEventListener('change', () => {
             const next = layerSel.value;
             if (!sec.images[next]) return;
-            // Persist current edits (in-memory only, until Save) for the previous layer
-            sec.meta.alignment[state.layerKey] = {
+            // Persist current edits (in-memory only, until Save) for the previous layer.
+            // Merge into the existing record so we keep per-source bySource
+            // entries the user already populated for this HE layer.
+            const prev = sec.meta.alignment[state.layerKey] || {};
+            sec.meta.alignment[state.layerKey] = Object.assign(prev, {
                 flip_lr: state.flip_lr, flip_ud: state.flip_ud,
                 scale_pct: state.scale_pct, rotate_deg: state.rotate_deg,
                 offx: state.offx, offy: state.offy,
                 landmarks: { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() },
-            };
+            });
             const savedMsiKey = state.msiKey;
             const ns = loadStateFor(next);
             Object.assign(state, ns);
             // Keep the user's MSI selection across HE switches (MSI is independent).
             state.msiKey = savedMsiKey;
+            // Re-apply any per-source override stored for the (new HE, current MSI)
+            // pair — without this the legacy top-level fields would shadow
+            // bySource[fid] until the user toggles the MSI dropdown.
+            overrideStateFromSource(state, state.layerKey, fidOf(state.msiKey));
             syncUiFromState();
             updatePreview();
             populateThumbs();
@@ -4470,9 +4635,16 @@ const Wizards = {
                 state.landmarks.msi = [];
             }
             state.msiKey = next;
+            // Swap slider / landmark state to match the per-source record
+            // for the new MSI's source. If the source has never been
+            // aligned the previous slider state is kept as a starting
+            // point (no-op inside overrideStateFromSource).
+            overrideStateFromSource(state, state.layerKey, fidOf(state.msiKey));
+            syncUiFromState();
             writeWorldCoords();
             populateThumbs();
             renderLandmarks();
+            updatePreview();
         });
 
         // ---- MSI colour mapping (Plasma) + synthetic TIC --------------------
@@ -4727,8 +4899,14 @@ const Wizards = {
         const restoreSnapshot = () => {
             if (initial.T) sec.meta.world_coords.T_he_to_msi = initial.T;
             else delete sec.meta.world_coords.T_he_to_msi;
+            if (initial.T_by_src) sec.meta.world_coords.T_he_to_msi_by_source = initial.T_by_src;
+            else delete sec.meta.world_coords.T_he_to_msi_by_source;
             if (initial.msi_um) sec.meta.world_coords.msi_um_per_px = initial.msi_um;
             else delete sec.meta.world_coords.msi_um_per_px;
+            // Restore the alignment record wholesale so per-source bySource
+            // entries the user touched mid-session are reverted alongside
+            // the top-level slider state.
+            sec.meta.alignment = initial.alignment ? JSON.parse(JSON.stringify(initial.alignment)) : {};
             try { panel.renderComposite(); } catch (e) {}
         };
         // The default Cancel button (data-modal-cancel) is wired by openModal
@@ -4745,12 +4923,28 @@ const Wizards = {
 
         saveBtn.addEventListener('click', () => {
             // Persist alignment params alongside T for round-trip editing.
-            sec.meta.alignment[state.layerKey] = {
-                flip_lr: state.flip_lr, flip_ud: state.flip_ud,
-                scale_pct: state.scale_pct, rotate_deg: state.rotate_deg,
-                offx: state.offx, offy: state.offy,
-                landmarks: { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() },
-            };
+            // The legacy top-level fields stay in place so old viewers and
+            // first-time per-source modal opens still find a sensible
+            // starting point.
+            const aRef = sec.meta.alignment[state.layerKey] || {};
+            aRef.flip_lr = state.flip_lr; aRef.flip_ud = state.flip_ud;
+            aRef.scale_pct = state.scale_pct; aRef.rotate_deg = state.rotate_deg;
+            aRef.offx = state.offx; aRef.offy = state.offy;
+            aRef.landmarks = { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() };
+            // New: also persist the per-source slider record so the next
+            // modal open repopulates correctly when the user re-picks the
+            // same MSI source.
+            const fid = fidOf(state.msiKey);
+            if (fid) {
+                aRef.bySource = aRef.bySource || {};
+                aRef.bySource[fid] = {
+                    flip_lr: state.flip_lr, flip_ud: state.flip_ud,
+                    scale_pct: state.scale_pct, rotate_deg: state.rotate_deg,
+                    offx: state.offx, offy: state.offy,
+                    landmarks: { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() },
+                };
+            }
+            sec.meta.alignment[state.layerKey] = aRef;
             // T and msi_um_per_px are already up to date thanks to writeWorldCoords()
             writeWorldCoords();
             try { App.queueSave(0); } catch (e) {}
@@ -7713,10 +7907,99 @@ const App = {
         this.focusCompoundKey = key || null;
         try { localStorage.setItem('desi:focusCompoundKey', this.focusCompoundKey || ''); } catch (e) {}
         for (const p of this.panels.values()) {
-            try { p.renderComposite(); } catch (e) {}
+            try {
+                // Re-pick ref MSI / cdisp size because the new focus may
+                // live in a different source file with a different raster
+                // grid (per-source T_he_to_msi). Without this the canvas
+                // would stay sized for the previous focus and the per-
+                // source T would be applied to a mismatched cdisp.
+                p.setupCanvasSize();
+                p.renderComposite();
+            } catch (e) {}
         }
         renderMethodTable();
         Toolbar.refreshAll();
+    },
+
+    // Rename a compound across the whole project. Touches every place a
+    // compound is keyed by `MSI_<base>` so the new name is reflected in
+    // both the runtime UI and the persisted IndexedDB record. The Storage
+    // path inside `storagePaths` is left intact because object names are
+    // built from blobId / filename, not the layerKey (publish helper at
+    // viewer/index.html:5451). The user must re-publish to push the
+    // updated compound name to share recipients.
+    async renameCompound(oldKey, newBase) {
+        if (!this.project) return;
+        if (!/^MSI_/i.test(oldKey)) return;
+        const cleanBase = String(newBase || '').trim();
+        if (!cleanBase) return;
+        const newKey = 'MSI_' + sanitizeCompoundName(cleanBase);
+        if (newKey === oldKey) return;
+
+        // Conflict check across all sections — never silently merge two
+        // distinct compounds even if they happen to share a section.
+        for (const s of this.project.sections) {
+            const series = s.msiSeries || {};
+            if (series[newKey] && series[newKey] !== series[oldKey]) {
+                showToast('既に "' + cleanBase + '" という名前のコンパウンドが存在します');
+                return;
+            }
+        }
+
+        const split = splitCeCv(cleanBase);
+        for (const s of this.project.sections) {
+            if (!s.msiSeries || !s.msiSeries[oldKey]) continue;
+            const ent = s.msiSeries[oldKey];
+            if (ent.compoundMeta) {
+                ent.compoundMeta.base = split.base;
+                ent.compoundMeta.name = cleanBase;
+                if (split.ce != null) ent.compoundMeta.ce = split.ce;
+                if (split.cv != null) ent.compoundMeta.cv = split.cv;
+            }
+            s.msiSeries[newKey] = ent;
+            delete s.msiSeries[oldKey];
+            if (s.meta && Array.isArray(s.meta.visibleLayers)) {
+                s.meta.visibleLayers = s.meta.visibleLayers.map(k => k === oldKey ? newKey : k);
+            }
+            if (s.storagePaths && s.storagePaths.msiSeries && s.storagePaths.msiSeries[oldKey]) {
+                s.storagePaths.msiSeries[newKey] = s.storagePaths.msiSeries[oldKey];
+                delete s.storagePaths.msiSeries[oldKey];
+            }
+        }
+
+        // Per-panel runtime caches (decoded image + tone-mapping settings)
+        // live outside the persisted project record. Migrate the keys so
+        // the next renderComposite doesn't re-fetch / lose state.
+        for (const panel of this.panels.values()) {
+            if (panel.imageSources && panel.imageSources[oldKey]) {
+                panel.imageSources[newKey] = panel.imageSources[oldKey];
+                delete panel.imageSources[oldKey];
+            }
+            if (panel.imageSettings && panel.imageSettings[oldKey]) {
+                panel.imageSettings[newKey] = panel.imageSettings[oldKey];
+                delete panel.imageSettings[oldKey];
+            }
+            if (panel.visibleLayers && panel.visibleLayers.has(oldKey)) {
+                panel.visibleLayers.delete(oldKey);
+                panel.visibleLayers.add(newKey);
+            }
+        }
+
+        if (this.focusCompoundKey === oldKey) {
+            this.setFocusCompoundKey(newKey);
+        }
+
+        for (const p of this.panels.values()) {
+            try {
+                p.refreshLayerBar && p.refreshLayerBar();
+                p.populateThumbnails && p.populateThumbnails();
+                p.renderComposite();
+            } catch (e) {}
+        }
+        renderMethodTable();
+        Toolbar.refreshAll();
+        this.queueSave();
+        showToast('コンパウンド名を "' + cleanBase + '" に変更しました。share に反映するには再 publish してください。', 5000);
     },
 
     refreshViewModeUI() {
@@ -8530,6 +8813,18 @@ const App = {
             try { SharePreview.open(this.project, role); }
             catch (e) { console.warn('SharePreview.open failed', e); }
         });
+        // Admin elevation from the main share view. The handler lives on
+        // SharePreview because it already manages the unlock RPC + reload
+        // dance; we just trigger the same flow without opening the preview
+        // overlay first. CSS hides the button outside share-mode and after
+        // elevation succeeds (body.share-admin), so no JS-side gating
+        // needed beyond a defensive shareMode check.
+        const shareAdminBtn = document.getElementById('btn-share-admin-login');
+        if (shareAdminBtn) shareAdminBtn.addEventListener('click', () => {
+            if (!this.shareMode) return;
+            try { SharePreview._promptAdminLogin(); }
+            catch (e) { console.warn('admin login failed', e); }
+        });
         const helpBtn = document.getElementById('btn-help');
         if (helpBtn) helpBtn.addEventListener('click', () => { openHelpModal().catch(e => console.error(e)); });
         document.getElementById('btn-import-zip').addEventListener('click', () => document.getElementById('hidden-import-input').click());
@@ -8553,9 +8848,57 @@ const App = {
         });
         document.getElementById('roi-toggle').addEventListener('change', () => this.redrawAllRois());
         document.addEventListener('keydown', (e) => {
-            if (!this.drawing.mode) return;
-            if (e.key === 'Escape') this.cancelDrawing();
-            else if (e.key === 'Enter') { e.preventDefault(); this.finalizeDrawing(); }
+            // Drawing-mode shortcuts take priority. Once drawing is active
+            // ArrowUp/Down belongs to vertex tweaking, not compound switching.
+            if (this.drawing.mode) {
+                if (e.key === 'Escape') this.cancelDrawing();
+                else if (e.key === 'Enter') { e.preventDefault(); this.finalizeDrawing(); }
+                return;
+            }
+            // Compound mode: ArrowUp/Down cycles the focus compound on the
+            // main share view, mirroring SharePreview._onKeyDown so a
+            // recipient can keyboard-browse the Method (MRM) table without
+            // opening the preview overlay first. Skip when typing in a form
+            // control so the field's own arrow-key step is preserved.
+            if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+            const tag = e.target && e.target.tagName;
+            if (tag && /^(INPUT|SELECT|TEXTAREA)$/.test(tag)) return;
+            if (this.viewMode !== 'compound') return;
+            const panel = this.activeSectionId ? this.panels.get(this.activeSectionId) : null;
+            if (!panel) return;
+            // Same sort the Method table uses (renderMethodTable at viewer/
+            // index.html:3717) so keyboard order matches the visible row order.
+            const layerKeys = Object.keys(panel.section.msiSeries || {})
+                .filter(k => /^MSI_/i.test(k))
+                .sort((a, b) => {
+                    const ma = panel.section.msiSeries[a];
+                    const mb = panel.section.msiSeries[b];
+                    const fa = (ma && ma.sourceFileId) || '';
+                    const fb = (mb && mb.sourceFileId) || '';
+                    if (fa !== fb) return fa.localeCompare(fb);
+                    return a.localeCompare(b);
+                });
+            if (!layerKeys.length) return;
+            const cur = this.focusCompoundKey;
+            const idx = layerKeys.indexOf(cur);
+            const baseIdx = idx >= 0 ? idx : 0;
+            const next = e.key === 'ArrowDown'
+                ? Math.min(baseIdx + 1, layerKeys.length - 1)
+                : Math.max(baseIdx - 1, 0);
+            if (next === idx) return;
+            e.preventDefault();
+            this.setFocusCompoundKey(layerKeys[next]);
+            // Mirror the click handler in renderMethodTable: ensure the new
+            // focus compound is visible in every panel so the share view
+            // doesn't go blank for that compound.
+            for (const p of this.panels.values()) {
+                if (p.imageSources[layerKeys[next]] && !p.visibleLayers.has(layerKeys[next])) {
+                    p.toggleLayer(layerKeys[next], true);
+                }
+            }
+            // Keep the focused row scrolled into view in the Method table.
+            const tr = document.querySelector('#method-rows tr[data-layer-key="' + layerKeys[next] + '"]');
+            if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: 'nearest' });
         });
         ['graph-select-1', 'graph-select-2', 'graph-select-3'].forEach(id => {
             document.getElementById(id).addEventListener('change', () => this.renderAnalysis());
