@@ -359,8 +359,11 @@ begin
     if v_pid is null then
         raise exception 'not_public' using errcode = '28P02';
     end if;
-    -- GC expired tokens like unlock_project does.
-    delete from public.session_tokens where expires_at < now();
+    -- GC expired tokens like unlock_project does. The session_tokens
+    -- alias is required because RETURNS TABLE makes `expires_at` an
+    -- OUT parameter in this function's scope, so an unqualified
+    -- `expires_at` in a body query collides (PG raises 42702).
+    delete from public.session_tokens st where st.expires_at < now();
     v_token   := encode(gen_random_bytes(24), 'hex');
     v_expires := now() + interval '12 hour';
     insert into public.session_tokens(token, project_id, role, expires_at)
