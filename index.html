@@ -185,6 +185,7 @@ const SupabaseClient = (() => {
         configured() { return !!_client(); },
         listProjects(ownerPw) { return rpc('list_projects', { _owner_password: ownerPw }); },
         verifyMasterPw(pw) { return rpc('verify_master_pw', { _pw: pw }); },
+        deleteProjectDoc(masterPw, slug) { return rpc('delete_project_doc', { _master_pw: masterPw, _slug: slug }); },
     };
 })();
 
@@ -521,9 +522,11 @@ function rowHtml(r) {
             <div class="flex gap-2">
               ${r.local
                   ? '<button type="button" class="btn primary" data-action="open-local">Open</button>'
-                  : '<button type="button" class="btn primary" data-action="open-server">Open</button>'}
+                  : '<button type="button" class="btn primary" data-action="open-server" title="サーバから取り込んで master mode で開きます (admin password 要)">Open (master)</button>'}
+              ${(!r.local && slug) ? '<button type="button" class="btn" data-action="open-share" title="閲覧専用 share view で開きます">Share view</button>' : ''}
               ${url ? '<button type="button" class="btn" data-action="copy-url">Copy URL</button>' : (r.local ? '<button type="button" class="btn" disabled title="Publish to share してから URL を取得してください">URL なし</button>' : '')}
               ${r.local ? '<button type="button" class="btn danger" data-action="delete-local">Delete</button>' : ''}
+              ${(!r.local && slug) ? '<button type="button" class="btn danger" data-action="delete-server" title="サーバから完全に削除 (master password 要)">Delete</button>' : ''}
             </div>
           </div>
           <div class="text-xs text-gray-600 mt-2">
@@ -559,6 +562,12 @@ async function renderList() {
         });
         click('open-server', () => {
             if (!slug) return;
+            // Master 取り込み経路: viewer 側で admin pw を聞いて Local IDB に
+            // ダウンロード → master mode で開く。share view は別ボタンに分離。
+            location.href = 'viewer/index.html?import=' + encodeURIComponent(slug);
+        });
+        click('open-share', () => {
+            if (!slug) return;
             location.href = 'viewer/index.html#share=' + encodeURIComponent(slug);
         });
         click('copy-url', async () => {
@@ -576,6 +585,43 @@ async function renderList() {
             if (!confirm('ローカルからこのプロジェクトを削除しますか? (サーバに publish 済みなら、サーバ側のデータは残ります)')) return;
             await ProjectStorage.deleteProject(localId);
             await renderList();
+        });
+        click('delete-server', async () => {
+            if (!slug) return;
+            if (!confirm('"' + slug + '" をサーバから完全に削除します。\n' +
+                         'projects / sections / rois / credentials / storage object すべて消去します。\n' +
+                         'この操作は元に戻せません。続けますか?')) return;
+            // 既存の master pw キャッシュを再利用 (publish フローと共通)
+            let masterPw = '';
+            try {
+                const raw = sessionStorage.getItem('desi:masterPw');
+                if (raw) {
+                    const p = JSON.parse(raw);
+                    if (p && p.expiresAt > Date.now()) masterPw = p.pw || '';
+                }
+            } catch (e) {}
+            if (!masterPw) {
+                masterPw = (prompt('Master password を入力してください', 'MSIadomine') || '').trim();
+                if (!masterPw) return;
+            }
+            try {
+                const r = await SupabaseClient.deleteProjectDoc(masterPw, slug);
+                if (r && r.ok) {
+                    // master pw キャッシュ更新 (12 h)
+                    try {
+                        sessionStorage.setItem('desi:masterPw',
+                            JSON.stringify({ pw: masterPw, expiresAt: Date.now() + 12 * 3600 * 1000 }));
+                    } catch (e) {}
+                    alert('削除しました (storage objects: ' + (r.paths_deleted || 0) + ' 件)');
+                    await renderList();
+                } else {
+                    alert('削除失敗: ' + JSON.stringify(r));
+                }
+            } catch (e) {
+                const msg = String((e && (e.message || e.details)) || '');
+                if (/unauthorized|28000/i.test(msg)) alert('Master password が違います');
+                else alert('削除失敗: ' + msg);
+            }
         });
     });
 }
@@ -797,6 +843,6 @@ document.addEventListener('DOMContentLoaded', () => { init().catch(e => { consol
 </script>
 <!-- Build tag: bumped on every push so a maintainer / recipient can spot a
      stale cached copy. Same value as viewer/index.html, kept in sync by hand. -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-07-r5</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-07-r6</div>
 </body>
 </html>

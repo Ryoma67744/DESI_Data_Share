@@ -561,6 +561,62 @@ $$;
 
 grant execute on function public.list_projects(text) to anon, authenticated;
 
+-- ---- 6b. delete_project_doc: Master-side server removal ------------
+-- Drops the project row (cascade-deletes sections / rois / credentials
+-- / session_tokens / roi_locks via existing FKs at schema.sql:32,40,
+-- 51,73 and share_locks.sql:10), then sweeps every storage.objects
+-- row referenced by sections.storage_paths so the atlases bucket
+-- doesn't grow orphaned blobs. master-pw gated to keep this off the
+-- share-recipient surface; the management page is the only entry
+-- point in the frontend.
+create or replace function public.delete_project_doc(_master_pw text, _slug text)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions
+as $$
+declare
+    v_pid uuid;
+    v_paths text[];
+    v_count int := 0;
+begin
+    if not public._verify_master_pw(_master_pw) then
+        raise exception 'unauthorized' using errcode = '28000';
+    end if;
+    if _slug is null or length(trim(_slug)) = 0 then
+        raise exception 'slug required';
+    end if;
+    select id into v_pid from public.projects where slug = _slug limit 1;
+    if v_pid is null then
+        return jsonb_build_object('ok', true, 'reason', 'not_found', 'paths_deleted', 0);
+    end if;
+    -- Gather every storage path referenced by sections.storage_paths.
+    -- Both `images` and `msiSeries` dictionaries store { path, mime,
+    -- filename } per layer key; we don't care about the key, just the
+    -- path string.
+    select array_agg(p) into v_paths from (
+        select v->>'path' as p
+          from public.sections s,
+               jsonb_each(coalesce(s.storage_paths->'images', '{}'::jsonb)) AS img(k, v)
+         where s.project_id = v_pid AND v->>'path' IS NOT NULL
+        UNION ALL
+        select v->>'path' as p
+          from public.sections s,
+               jsonb_each(coalesce(s.storage_paths->'msiSeries', '{}'::jsonb)) AS msi(k, v)
+         where s.project_id = v_pid AND v->>'path' IS NOT NULL
+    ) all_paths;
+    if v_paths is not null and array_length(v_paths, 1) > 0 then
+        -- SECURITY DEFINER runs as the function owner (postgres), which
+        -- holds DELETE on storage.objects regardless of bucket policy.
+        delete from storage.objects
+         where bucket_id = 'atlases' AND name = ANY(v_paths);
+        get diagnostics v_count = row_count;
+    end if;
+    delete from public.projects where id = v_pid;
+    return jsonb_build_object('ok', true, 'project_id', v_pid, 'paths_deleted', v_count);
+end
+$$;
+
+grant execute on function public.delete_project_doc(text, text) to anon, authenticated;
+
 -- ---- 7. Storage RLS helper for publish_sessions (Phase 1 fix) ------
 -- The atlases write policies in section 4 reference publish_sessions
 -- from a subquery that is evaluated as the request's role (anon when
