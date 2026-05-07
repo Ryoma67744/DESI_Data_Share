@@ -4288,18 +4288,32 @@ const Wizards = {
         // ---- Snapshot for Cancel --------------------------------------------
         sec.meta = sec.meta || {};
         sec.meta.world_coords = sec.meta.world_coords || {};
+        sec.meta.alignment = sec.meta.alignment || {};
         const initial = {
-            T:      sec.meta.world_coords.T_he_to_msi
-                        ? JSON.parse(JSON.stringify(sec.meta.world_coords.T_he_to_msi))
-                        : null,
-            msi_um: sec.meta.world_coords.msi_um_per_px
-                        ? JSON.parse(JSON.stringify(sec.meta.world_coords.msi_um_per_px))
-                        : null,
+            T:        sec.meta.world_coords.T_he_to_msi
+                          ? JSON.parse(JSON.stringify(sec.meta.world_coords.T_he_to_msi))
+                          : null,
+            T_by_src: sec.meta.world_coords.T_he_to_msi_by_source
+                          ? JSON.parse(JSON.stringify(sec.meta.world_coords.T_he_to_msi_by_source))
+                          : null,
+            msi_um:   sec.meta.world_coords.msi_um_per_px
+                          ? JSON.parse(JSON.stringify(sec.meta.world_coords.msi_um_per_px))
+                          : null,
+            // Snapshot the entire per-HE-layer alignment record so per-source
+            // bySource entries survive a Cancel even when the user toggled
+            // between sources during the session.
+            alignment: JSON.parse(JSON.stringify(sec.meta.alignment || {})),
         };
 
         // ---- State -----------------------------------------------------------
-        sec.meta.alignment = sec.meta.alignment || {};
         const layerKey = heKeys[0];
+        // Helper: source file id of an MSI compound key, or null for
+        // synthetic TIC / unknown.
+        const fidOf = (msiKey) => {
+            if (!msiKey || msiKey === '__TIC__') return null;
+            const ent = sec.msiSeries && sec.msiSeries[msiKey];
+            return (ent && ent.sourceFileId) || null;
+        };
         const loadStateFor = (key) => {
             const a = sec.meta.alignment[key] || {};
             return {
@@ -4314,6 +4328,27 @@ const Wizards = {
                               msi: (a.landmarks && a.landmarks.msi ? a.landmarks.msi.slice() : []) },
                 pickMode:   'none',
             };
+        };
+        // When the user picks an MSI compound from a source that already has
+        // its own slider state stored, swap that in over the legacy top-level
+        // values. Falls through silently for sources the user hasn't aligned
+        // yet (first-time alignment of a new source uses the legacy values
+        // as starting point).
+        const overrideStateFromSource = (st, heKey, fid) => {
+            if (!fid) return;
+            const a = sec.meta.alignment[heKey] || {};
+            const bySrc = (a.bySource && a.bySource[fid]) || null;
+            if (!bySrc) return;
+            st.flip_lr = !!bySrc.flip_lr;
+            st.flip_ud = !!bySrc.flip_ud;
+            if (Number.isFinite(bySrc.scale_pct))  st.scale_pct  = bySrc.scale_pct;
+            if (Number.isFinite(bySrc.rotate_deg)) st.rotate_deg = bySrc.rotate_deg;
+            if (Number.isFinite(bySrc.offx))       st.offx       = bySrc.offx;
+            if (Number.isFinite(bySrc.offy))       st.offy       = bySrc.offy;
+            if (bySrc.landmarks) {
+                st.landmarks.he  = bySrc.landmarks.he  ? bySrc.landmarks.he.slice()  : [];
+                st.landmarks.msi = bySrc.landmarks.msi ? bySrc.landmarks.msi.slice() : [];
+            }
         };
         const state = loadStateFor(layerKey);
         const msiUm = sec.meta.world_coords.msi_um_per_px || { x: 50, y: 50 };
@@ -4337,6 +4372,10 @@ const Wizards = {
                         || (offerSyntheticTic ? '__TIC__' : null)
                         || allMsiKeys[0]
                         || null);
+        // Pre-populate sliders from per-source state when the chosen MSI
+        // belongs to a source the user has already aligned in a previous
+        // session.
+        overrideStateFromSource(state, state.layerKey, fidOf(state.msiKey));
 
         // ---- Modal HTML ------------------------------------------------------
         const layerOpts = heKeys.map(k => `<option value="${safe(k)}"${k===state.layerKey?' selected':''}>${safe(k)}</option>`).join('');
@@ -4475,7 +4514,22 @@ const Wizards = {
         let rafId = 0;
         const writeWorldCoords = () => {
             sec.meta.world_coords = sec.meta.world_coords || {};
-            sec.meta.world_coords.T_he_to_msi = buildHeToMsiAffine(state);
+            const T = buildHeToMsiAffine(state);
+            // Always keep the legacy single-T field updated so old viewers
+            // (and the fallback path in _resolveTHeToMsi) still see something
+            // sensible.
+            sec.meta.world_coords.T_he_to_msi = T;
+            // New: also stamp the per-source override for the MSI compound
+            // currently selected in the modal. Synthetic TIC has no
+            // sourceFileId — it's a cross-source visual aid only — so we
+            // skip writing per-source there and let the legacy field carry
+            // the user's intent.
+            const fid = fidOf(state.msiKey);
+            if (fid) {
+                sec.meta.world_coords.T_he_to_msi_by_source =
+                    sec.meta.world_coords.T_he_to_msi_by_source || {};
+                sec.meta.world_coords.T_he_to_msi_by_source[fid] = T;
+            }
             sec.meta.world_coords.msi_um_per_px = { x: state.msi_um_x, y: state.msi_um_y };
             if (state.msiKey) sec.meta.alignmentMsiKey = state.msiKey;
         };
@@ -4530,18 +4584,25 @@ const Wizards = {
         layerSel.addEventListener('change', () => {
             const next = layerSel.value;
             if (!sec.images[next]) return;
-            // Persist current edits (in-memory only, until Save) for the previous layer
-            sec.meta.alignment[state.layerKey] = {
+            // Persist current edits (in-memory only, until Save) for the previous layer.
+            // Merge into the existing record so we keep per-source bySource
+            // entries the user already populated for this HE layer.
+            const prev = sec.meta.alignment[state.layerKey] || {};
+            sec.meta.alignment[state.layerKey] = Object.assign(prev, {
                 flip_lr: state.flip_lr, flip_ud: state.flip_ud,
                 scale_pct: state.scale_pct, rotate_deg: state.rotate_deg,
                 offx: state.offx, offy: state.offy,
                 landmarks: { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() },
-            };
+            });
             const savedMsiKey = state.msiKey;
             const ns = loadStateFor(next);
             Object.assign(state, ns);
             // Keep the user's MSI selection across HE switches (MSI is independent).
             state.msiKey = savedMsiKey;
+            // Re-apply any per-source override stored for the (new HE, current MSI)
+            // pair — without this the legacy top-level fields would shadow
+            // bySource[fid] until the user toggles the MSI dropdown.
+            overrideStateFromSource(state, state.layerKey, fidOf(state.msiKey));
             syncUiFromState();
             updatePreview();
             populateThumbs();
@@ -4576,9 +4637,16 @@ const Wizards = {
                 state.landmarks.msi = [];
             }
             state.msiKey = next;
+            // Swap slider / landmark state to match the per-source record
+            // for the new MSI's source. If the source has never been
+            // aligned the previous slider state is kept as a starting
+            // point (no-op inside overrideStateFromSource).
+            overrideStateFromSource(state, state.layerKey, fidOf(state.msiKey));
+            syncUiFromState();
             writeWorldCoords();
             populateThumbs();
             renderLandmarks();
+            updatePreview();
         });
 
         // ---- MSI colour mapping (Plasma) + synthetic TIC --------------------
@@ -4833,8 +4901,14 @@ const Wizards = {
         const restoreSnapshot = () => {
             if (initial.T) sec.meta.world_coords.T_he_to_msi = initial.T;
             else delete sec.meta.world_coords.T_he_to_msi;
+            if (initial.T_by_src) sec.meta.world_coords.T_he_to_msi_by_source = initial.T_by_src;
+            else delete sec.meta.world_coords.T_he_to_msi_by_source;
             if (initial.msi_um) sec.meta.world_coords.msi_um_per_px = initial.msi_um;
             else delete sec.meta.world_coords.msi_um_per_px;
+            // Restore the alignment record wholesale so per-source bySource
+            // entries the user touched mid-session are reverted alongside
+            // the top-level slider state.
+            sec.meta.alignment = initial.alignment ? JSON.parse(JSON.stringify(initial.alignment)) : {};
             try { panel.renderComposite(); } catch (e) {}
         };
         // The default Cancel button (data-modal-cancel) is wired by openModal
@@ -4851,12 +4925,28 @@ const Wizards = {
 
         saveBtn.addEventListener('click', () => {
             // Persist alignment params alongside T for round-trip editing.
-            sec.meta.alignment[state.layerKey] = {
-                flip_lr: state.flip_lr, flip_ud: state.flip_ud,
-                scale_pct: state.scale_pct, rotate_deg: state.rotate_deg,
-                offx: state.offx, offy: state.offy,
-                landmarks: { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() },
-            };
+            // The legacy top-level fields stay in place so old viewers and
+            // first-time per-source modal opens still find a sensible
+            // starting point.
+            const aRef = sec.meta.alignment[state.layerKey] || {};
+            aRef.flip_lr = state.flip_lr; aRef.flip_ud = state.flip_ud;
+            aRef.scale_pct = state.scale_pct; aRef.rotate_deg = state.rotate_deg;
+            aRef.offx = state.offx; aRef.offy = state.offy;
+            aRef.landmarks = { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() };
+            // New: also persist the per-source slider record so the next
+            // modal open repopulates correctly when the user re-picks the
+            // same MSI source.
+            const fid = fidOf(state.msiKey);
+            if (fid) {
+                aRef.bySource = aRef.bySource || {};
+                aRef.bySource[fid] = {
+                    flip_lr: state.flip_lr, flip_ud: state.flip_ud,
+                    scale_pct: state.scale_pct, rotate_deg: state.rotate_deg,
+                    offx: state.offx, offy: state.offy,
+                    landmarks: { he: state.landmarks.he.slice(), msi: state.landmarks.msi.slice() },
+                };
+            }
+            sec.meta.alignment[state.layerKey] = aRef;
             // T and msi_um_per_px are already up to date thanks to writeWorldCoords()
             writeWorldCoords();
             try { App.queueSave(0); } catch (e) {}
