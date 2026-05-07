@@ -484,6 +484,29 @@ begin
                 )
             );
     end if;
+
+    -- Phase 7c: publish-token DELETE policy. Required by the management
+    -- page's "Delete (server)" flow which sweeps every blob under the
+    -- project's slug after delete_project_doc removes the projects row.
+    -- Same predicate as the UPDATE policy (publish_session token must be
+    -- valid and the path prefix must match the slug it was minted for).
+    if not exists (
+        select 1 from pg_policies
+         where schemaname = 'storage' and tablename = 'objects'
+           and policyname = 'atlases publish-token delete'
+    ) then
+        create policy "atlases publish-token delete" on storage.objects
+            for delete to anon, authenticated
+            using (
+                bucket_id = 'atlases'
+                and exists (
+                    select 1 from public.publish_sessions ps
+                     where ps.token = nullif(current_setting('request.headers', true), '')::jsonb->>'x-publish-token'
+                       and ps.expires_at > now()
+                       and storage.objects.name like ps.slug || '/%'
+                )
+            );
+    end if;
 end
 $$;
 
