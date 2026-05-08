@@ -236,19 +236,13 @@ body.splitting-v { cursor:row-resize !important; }
 .toast { background:#0f172a; color:#fff; padding:6px 14px; font-size:12px; border-radius:9999px; opacity:0.92; }
 #method-rows tr.method-row { cursor:pointer; }
 #method-rows tr.method-row:hover { background:#f1f5f9; }
-/* Selected-row highlights. Placed AFTER the :hover rule so the highlight
-   wins over the transient hover background — the user must always be able
-   to spot which compound is currently in focus, even while their mouse is
-   hovering on another row.
-     .active  Free mode: this MSI layer is currently visible in the active
-              section. Compound mode: also gets .focus (see below).
-     .focus   Compound mode: the project-wide focus compound that drives
-              every section's render. Stronger blue + a left accent stripe
-              so it stands out from .active. */
-#method-rows tr.method-row.active        { background:#eef2ff; }
-#method-rows tr.method-row.active:hover  { background:#e0e7ff; }
-#method-rows tr.method-row.focus         { background:#dbeafe; box-shadow:inset 3px 0 0 #2563eb; }
-#method-rows tr.method-row.focus:hover   { background:#bfdbfe; }
+/* Only the current Compound-mode focus row gets a persistent highlight.
+   .active (= Free-mode visible layers) intentionally has no background
+   so previously-clicked rows don't accumulate blue marks across the
+   table — only the row driving the current view stays blue. Placed
+   AFTER :hover so the highlight wins over the transient hover bg. */
+#method-rows tr.method-row.focus       { background:#dbeafe; box-shadow:inset 3px 0 0 #2563eb; }
+#method-rows tr.method-row.focus:hover { background:#bfdbfe; }
 /* Column-click sort affordance for the main Method <thead>. Re-clicking
    the same column flips direction; a third click clears the sort. */
 #method-table thead th[data-sort-key] { cursor:pointer; user-select:none; position:relative; }
@@ -10328,6 +10322,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-08-r18</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-08-r19</div>
 </body>
 </html>
