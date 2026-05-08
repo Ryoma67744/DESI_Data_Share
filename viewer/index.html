@@ -6680,7 +6680,9 @@ const SharePreview = {
                 try { panel.renderComposite(); } catch (e) {}
             }
         }
-        try { this.refresh(App.project); } catch (e) {}
+        // Same fix as _applyPreviewOpacity: rebake cell <img>'s in place
+        // so the toggle reflects without resetting zoom/pan state.
+        try { this._rebakeCellImages(App.project, App.focusCompoundKey); } catch (e) {}
     },
 
     _restoreGrayscale() {
@@ -6839,7 +6841,11 @@ const SharePreview = {
                 }
                 try { panel.renderComposite(); } catch (e) {}
             }
-            try { this.refresh(App.project); } catch (e) {}
+            // Was: this.refresh(App.project) — but refresh() rebuilds the
+            // image grid and resets _cellTransforms, which discards the
+            // user's zoom/pan state every time the slider moves. Rebake
+            // the cell <img>'s in place instead.
+            try { this._rebakeCellImages(App.project, App.focusCompoundKey); } catch (e) {}
         });
     },
 
@@ -7112,6 +7118,12 @@ const SharePreview = {
                     try { p.applyRangeRaw(edge, raw); } catch (e) {}
                 }
             }
+            // applyRangeRaw runs renderComposite synchronously per panel
+            // which updates each cdisp canvas, but the preview's <img>
+            // dataURLs are baked snapshots — without this rebake the
+            // image visible in the overlay stays at its open()-time
+            // contents.
+            this._rebakeCellImages(App.project, focusKey);
         };
         minEl.addEventListener('change', () => apply('min', minEl.value));
         maxEl.addEventListener('change', () => apply('max', maxEl.value));
@@ -7440,6 +7452,35 @@ const SharePreview = {
         if (next === idx) return;
         App.setFocusCompoundKey(this.compoundKeys[next]);
         this.refresh(App.project);
+    },
+
+    // Re-bake every preview cell's <img> from its panel's current cdisp
+    // canvas content. Used by Range / Opacity / HE-grayscale handlers
+    // that mutate panel.imageSettings synchronously and call
+    // panel.renderComposite() — without this, the cdisp updates but the
+    // dataURL the preview <img> was loaded from on open() stays stale.
+    // Unlike refresh() this preserves _cellTransforms (zoom / pan) and
+    // _sectionRotations because we only swap the existing img.src
+    // instead of rebuilding the cell DOM.
+    _rebakeCellImages(project, focusKey) {
+        const grid = this.overlay && this.overlay.querySelector('[data-image-grid]');
+        if (!grid || !project) return;
+        const sections = project.sections || [];
+        sections.forEach((sec, idx) => {
+            const wrap = grid.querySelector(`.cell-img-wrap[data-cell-idx="${idx}"]`);
+            if (!wrap) return;
+            const img = wrap.querySelector('[data-cell-img]');
+            if (!img) return;
+            const panel = App && App.panels && App.panels.get(sec.id);
+            if (!panel || !panel.dom || !panel.dom.cdisp || panel.dom.cdisp.width === 0) return;
+            const ent = focusKey ? (sec.msiSeries || {})[focusKey] : null;
+            if (!ent) return;
+            try {
+                const rotDeg = (this._sectionRotations[idx] || 0) - 90;
+                const baked = this._bakeRotatedCanvas(panel.dom.cdisp, rotDeg);
+                img.src = baked.toDataURL('image/png');
+            } catch (e) { console.warn('preview rebake failed', idx, e); }
+        });
     },
 
     _renderStatsTable(project, focusKey) {
@@ -10027,6 +10068,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-08-r12</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-08-r13</div>
 </body>
 </html>
