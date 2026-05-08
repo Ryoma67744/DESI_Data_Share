@@ -17,9 +17,10 @@ Master-side operations (creating projects, registering layers, publishing, etc.)
 6. [Method (MRM) and switching compounds](#6-method-mrm-and-switching-compounds)
 7. [Range / Opacity / Rotation tweaks](#7-range--opacity--rotation-tweaks) / [Per-layer settings (gear ⚙)](#7-bis-per-layer-display-settings-gear-) / [MSI scale bar](#7-tris-msi-scale-bar)
 8. [Editing the Memo](#8-editing-the-memo)
-9. [Export ZIP for local download](#9-export-zip-for-local-download)
-10. [What gets saved vs discarded](#10-what-gets-saved-vs-discarded)
-11. [Keyboard shortcuts](#11-keyboard-shortcuts)
+9. [Preview overlay (image grid)](#9-preview-overlay-image-grid)
+10. [Export ZIP for local download](#10-export-zip-for-local-download)
+11. [What gets saved vs discarded](#11-what-gets-saved-vs-discarded)
+12. [Keyboard shortcuts](#12-keyboard-shortcuts)
 
 ---
 
@@ -104,12 +105,14 @@ The session expires after **12 hours**. Closing the tab is fine — re-opening t
 
 | Region | Role |
 | --- | --- |
-| Top Bar | View mode toggle (Free / Compound), Export ZIP, Help |
+| Top Bar | View mode toggle (Free / Compound), Preview, Export ZIP, 🔑 Admin, Help |
 | ROI LIST | Project-wide ROI list. Show toggle, draw new, draw on extra section |
 | Sections Grid | Section panels. Click to activate (blue outline); drag to pan; wheel to zoom |
-| Method (MRM) | MSI layer table for the active section. Click to switch display |
+| Method (MRM) | MSI layer table for the active section. Click / ↑↓ keys to switch |
 | ANALYSIS | Bar chart of the selected ROI across sections × compounds |
 | Memo | Sample / Machine / Matrix / Google Keep / +α … (temporary edits) |
+
+> Each section panel's top-left **section-name label** also shows the **Pixel pitch (μm/px)** when the publisher set it during Align (e.g. `Section 1 · 50 μm/px`). Anisotropic pixels (x ≠ y) appear as `50×60 μm/px`.
 
 ---
 
@@ -233,6 +236,12 @@ Clicking a row:
 - **Compound mode** focuses that compound across every section (handy for cross-section comparison)
 - **Free mode** simply toggles that single layer on/off
 
+> **Keyboard navigation**: With focus inside the Method table, **↑/↓** move focus to the previous / next compound (Compound mode applies it to every section instantly).
+
+> **Compound title format**: Each row title reads `<compound>_<precursor> > <product>` (e.g. `DHA-NEG_327.4 > 283.4`). The same format appears at the top of the screen in Compound mode. Compounds without precursor / product fall back to the bare name.
+
+> **TIC (Total Ion Current)**: A synthetic per-source map that sums every MSI layer in that source can be exposed as `__TIC__` / `TIC_<filename>`. Sections with multiple sources can switch TIC per source.
+
 > Whole-file actions like `[all on]` / `[delete file]` live on the **thumbnail dropdown summary** (`▶ <filename>`). Recipients don't see `delete file`.
 
 ---
@@ -300,9 +309,10 @@ When an MSI layer is visible AND the publisher has set **MSI pixel size (μm/px)
   <span style="display:inline-block;height:4px;width:80px;background:#0f172a;box-shadow:0 0 0 1px #fff;vertical-align:middle;margin-right:6px;"></span>200 μm
 </div>
 
-- The unit shrinks as you zoom in (e.g. 500 μm → 200 μm → 100 μm) and grows as you zoom out (100 μm → 500 μm → 1 mm).
+- The unit shrinks as you zoom in (e.g. 500 μm → 200 μm → 100 μm) and grows as you zoom out (100 μm → 500 μm → 1 mm). The values come from a NICE round-number set: 10 / 20 / 50 / 100 / 200 / 500 / 1000 / …
 - Pan (drag) and Rotation never move the bar — it stays anchored to the bottom-left of the panel.
 - The bar is hidden on sections with no MSI layer or where the publisher hasn't set a pixel size.
+- The same pitch is also rendered into each section's top-left label (e.g. `Section 1 · 50 μm/px`).
 
 ---
 
@@ -314,7 +324,24 @@ The **Memo** form on the bottom-right lets you edit Sample / Machine / Google Ke
 
 ---
 
-## 9. Export ZIP for local download
+## 9. Preview overlay (image grid)
+
+The header **Preview** button opens a side-by-side overlay that shows every section for a single compound. It's optimised for slide-deck screenshots and quick cross-section comparison.
+
+| Region | Role |
+| --- | --- |
+| **Method panel (left)** | Compound list. Click or ↑↓ keys to change focus. The right-edge splitter is **draggable** — pull it horizontally to resize the panel; the chosen width is remembered on next open. |
+| **Image grid (center)** | One MSI cell per section. Each cell has a **dynamic scalebar** at the bottom and a **Section name + Pixel pitch** caption at the top. Drag to pan, wheel to zoom inside each cell. |
+| **Range slider (top)** | **Project-wide vmin / vmax** so every section uses the same colour scale. The chosen range survives closing and reopening Preview. |
+| **Stats / Colorbar (right)** | Statistics for the focus compound + the Plasma colour bar. |
+| **🔑 Admin (top-right)** | When opened with a viewer password, this **escalates** to admin without closing Preview — the admin password modal now appears on top of the overlay. |
+
+> The Preview Range is independent from the per-section toolbar Range; closing Preview reverts the toolbar values.
+> Sections with multiple sources can flip between `TIC_<filename>` rows to inspect each source's TIC separately.
+
+---
+
+## 10. Export ZIP for local download
 
 The header's **Export ZIP** packages the entire viewable project into a single zip on your machine:
 
@@ -348,7 +375,7 @@ The header's **Export ZIP** packages the entire viewable project into a single z
 
 ---
 
-## 10. What gets saved vs discarded
+## 11. What gets saved vs discarded
 
 | Action | Where it persists | Visible to others | Survives reload |
 | --- | --- | --- | --- |
@@ -369,10 +396,11 @@ Bottom line:
 
 ---
 
-## 11. Keyboard shortcuts
+## 12. Keyboard shortcuts
 
 | Key | Action |
 | --- | --- |
+| `↑` / `↓` | Method (MRM) table: move focus to previous / next compound |
 | `Enter` | Drawing mode: commit the ROI at the current vertex set |
 | `Escape` | Drawing mode: cancel (in-flight vertices are dropped) |
 | `Ctrl + F5` / `Cmd + Shift + R` | Browser hard reload |

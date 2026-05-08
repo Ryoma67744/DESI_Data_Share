@@ -14,7 +14,8 @@
 6. [サーバから一覧取得 (別 PC でも見る)](#6-サーバから一覧取得-別-pc-でも見る)
 7. [URL のコピー](#7-url-のコピー)
 8. [データの保存先](#8-データの保存先)
-9. [困ったときは](#9-困ったときは)
+9. [ビルドタグ (右下バッジ)](#9-ビルドタグ-右下バッジ)
+10. [困ったときは](#10-困ったときは)
 
 ---
 
@@ -81,12 +82,24 @@
 
 ## 5. プロジェクトを開く・削除する
 
-- **Open**: ビューアに遷移してそのプロジェクトを開く
-  - Local 行 → 通常のローカル編集モード
-  - Server only 行 → 共有モード (viewer pw を要求)
-- **Delete**: ローカル IndexedDB から削除
-  - サーバに publish 済みなら **サーバ側のデータは残る** (Server only に変わる)
-  - 完全削除したい場合は Supabase ダッシュボードから
+行ごとのバッジに応じて出るボタンが変わります。
+
+| 行のバッジ | 出るボタン | 用途 |
+| --- | --- | --- |
+| Local / Local + Server | `Open` / `Copy URL` / `Delete` | この PC で編集 / 共有 URL コピー / IDB から削除 |
+| **Server only** | **`Open (master)` / `Share view` / `Delete (server)`** | 別 PC で publish した project をこの PC で master 編集 / share recipient として閲覧 / **サーバから完全削除** |
+
+### 5-1. Server only 行のボタン詳細
+
+- **Open (master)**: viewer に `?import=<slug>` 付きで遷移し、master pw を入力すると Storage から全 blob をダウンロードして IDB に書き戻し、master 画面が起動。以降は通常の auto-publish フローに乗ります。
+- **Share view**: 普通の `#share=<slug>` リンクで viewer に遷移 (viewer pw 入力 → 受け手と同じ画面)。
+- **Delete (server)**: master pw を要求 → 確認ダイアログ → サーバの `projects` 行 + 関連子テーブル (sections / rois / project_credentials / session_tokens / roi_locks) + Storage 配下 `<slug>/...` のオブジェクトをすべて削除。**復旧手段なし** なので注意。
+
+### 5-2. Local / Local + Server 行の Delete
+
+- ローカル IndexedDB のみから削除
+- サーバに publish 済みなら **サーバ側のデータは残る** (`Server only` に変わる)
+- サーバ側も消したいときは Server only 行に切替えて `Delete (server)` か、Supabase ダッシュボードから手動削除
 
 ---
 
@@ -98,8 +111,10 @@
 2. **admin password** を入力 (既定 `MSIadomine`)
 3. その admin pw が登録されているプロジェクトがすべて表示される
 4. 入力した pw は sessionStorage に 12 時間キャッシュ (次回はプロンプトなし)
+5. ローカルに無い project には **`Server only`** バッジが付き、`Open (master)` / `Share view` / `Delete (server)` ボタンが出ます
 
 > 共通 admin pw を運用していれば、どの PC でも同じパスワードで全プロジェクトを呼び出せます。
+> 1 人で複数 PC を順番に使う運用では、Phase 1 で publish → Phase 2 PC で `Open (master)` (= `?import=<slug>`) → 続きの編集 → auto-publish → 次の PC で `Open (master)` … が標準フローです。
 
 ---
 
@@ -128,7 +143,17 @@ Publish 済みのプロジェクトには `Copy URL` ボタンが出ます。
 
 ---
 
-## 9. 困ったときは
+## 9. ビルドタグ (右下バッジ)
+
+画面右下に **`v:YYYY-MM-DD-rN`** という小さなビルドタグが常時出ています。
+
+- ファイル更新後にハードリロード (Ctrl+F5) すれば必ず最新版になります — タグの値が変わっていれば適用済の確認になります
+- バグ報告時に「v:2026-05-08-r15」のようにタグを添えていただけると再現確認が早くなります
+- share recipient 画面 / master 画面 / 管理画面すべてに同じタグが出ます
+
+---
+
+## 10. 困ったときは
 
 | 症状 | 対処 |
 | --- | --- |
@@ -137,3 +162,5 @@ Publish 済みのプロジェクトには `Copy URL` ボタンが出ます。
 | URL コピーボタンが出ない | まだ Publish to share していない。`Open` → ビューアで Publish |
 | パスワードを入力しても先に進めない | キャッシュをクリア + 再ロード。それでもダメなら admin pw を変更した可能性 |
 | 別 PC からプロジェクトが見えない | `サーバから一覧取得` で admin pw を入力し直してください |
+| `Delete (server)` で「失敗: N 件」 | Storage の publish-token DELETE policy が未適用。`supabase/share_locks.sql` の §4 を再実行してください |
+| `Open (master)` で master pw を聞かれる | `?import=<slug>` 経由の初回オープンは必ず master pw が必要 (publish 時の admin pw 入力と同じ値) |

@@ -14,7 +14,8 @@ This guide covers the **management page (`/`)** only. For data registration / pu
 6. [Pulling the list from the server (works on any PC)](#6-pulling-the-list-from-the-server-works-on-any-pc)
 7. [Copying the share URL](#7-copying-the-share-url)
 8. [Where data is stored](#8-where-data-is-stored)
-9. [Troubleshooting](#9-troubleshooting)
+9. [Build tag (bottom-right badge)](#9-build-tag-bottom-right-badge)
+10. [Troubleshooting](#10-troubleshooting)
 
 ---
 
@@ -81,12 +82,24 @@ These values appear in the viewer's bottom-right Memo panel automatically.
 
 ## 5. Opening / deleting a project
 
-- **Open**: jumps to the viewer with that project loaded
-  - Local rows → ordinary local edit mode
-  - Server-only rows → share mode (asks for the viewer password)
-- **Delete**: removes the project from the local IndexedDB only
-  - The server copy stays if it was published (the row turns into "Server only")
-  - Permanent deletion still has to be done from the Supabase dashboard
+The buttons differ by row badge.
+
+| Badge | Buttons | Use |
+| --- | --- | --- |
+| Local / Local + Server | `Open` / `Copy URL` / `Delete` | Edit on this PC / copy share URL / drop from local IDB |
+| **Server only** | **`Open (master)` / `Share view` / `Delete (server)`** | Master-edit a project published from another PC / view as a recipient / **fully delete from the server** |
+
+### 5-1. Server-only row buttons
+
+- **Open (master)**: navigates to viewer at `?import=<slug>`, prompts for the master password, downloads every blob from Storage into IDB, then boots the master view. Subsequent saves auto-publish, keeping every PC in sync.
+- **Share view**: ordinary `#share=<slug>` viewer link (recipients flow — needs viewer pw).
+- **Delete (server)**: requires master pw + a confirm dialog. Removes the `projects` row + cascading children (sections / rois / project_credentials / session_tokens / roi_locks) + every Storage object under `<slug>/...`. **No undo**; double-check the slug.
+
+### 5-2. Delete on Local / Local + Server rows
+
+- Removes the entry from the local IndexedDB only.
+- If the project is also on the server, the server copy stays (the row downgrades to `Server only`).
+- To wipe the server too, use the `Delete (server)` button on the `Server only` row, or the Supabase dashboard.
 
 ---
 
@@ -98,8 +111,10 @@ When you want to see, from this PC, projects you published from a different PC:
 2. Enter the **admin password** (default `MSIadomine`)
 3. Every project that has that admin password registered shows up
 4. The password is cached in sessionStorage for 12 h (no re-prompt next time)
+5. Rows that are not in the local IDB show the **`Server only`** badge with `Open (master)` / `Share view` / `Delete (server)` buttons
 
 > If you use a single shared admin password across projects, one entry retrieves the entire catalogue from any PC.
+> The standard "one operator, multiple PCs" workflow is: publish from PC A → on PC B click `Open (master)` (= `?import=<slug>`) → continue editing → auto-publish → on PC C click `Open (master)` again, and so on.
 
 ---
 
@@ -128,7 +143,17 @@ Unpublished projects show a disabled `URL なし` (No URL) button. `Open` → pu
 
 ---
 
-## 9. Troubleshooting
+## 9. Build tag (bottom-right badge)
+
+A small **`v:YYYY-MM-DD-rN`** badge is permanently visible in the bottom-right corner.
+
+- After updating files, hard-reload (Ctrl+F5) and confirm the badge changed — that proves the new build is in effect.
+- When filing bug reports, include the tag (e.g. `v:2026-05-08-r15`) so issues can be reproduced precisely.
+- The same tag appears on the manager, master and share-recipient views.
+
+---
+
+## 10. Troubleshooting
 
 | Symptom | Action |
 | --- | --- |
@@ -137,3 +162,5 @@ Unpublished projects show a disabled `URL なし` (No URL) button. `Open` → pu
 | Copy URL button is missing | Project hasn't been published yet. `Open` → publish in the viewer |
 | Password keeps being rejected | Clear cache + reload. If still failing, the admin password may have been changed |
 | Projects from another PC not showing | Press `サーバから一覧取得` and re-enter the admin password |
+| `Delete (server)` reports "失敗: N 件" | The Storage publish-token DELETE policy has not been applied. Re-run §4 of `supabase/share_locks.sql` |
+| `Open (master)` keeps asking for the master password | Expected on the first `?import=<slug>` open — same value as the admin password used at publish time |

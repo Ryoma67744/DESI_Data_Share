@@ -73,7 +73,7 @@ body.share-mode:not(.share-admin) #btn-share-admin-login { display:inline-flex; 
 .sync-status.sync-needs-master-pw { background:#ede9fe; color:#6d28d9; }
 .sync-status.sync-error           { background:#fee2e2; color:#b91c1c; }
 body.share-mode .sync-status { display:none !important; }
-.modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:60; display:flex; align-items:center; justify-content:center; }
+.modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:10000; display:flex; align-items:center; justify-content:center; }
 .modal-card { background:#fff; border-radius:8px; box-shadow:0 12px 30px rgba(0,0,0,0.2); padding:18px; width:480px; max-width:92vw; max-height:88vh; overflow-y:auto; }
 .modal-card h2 { font-size:14px; font-weight:600; margin-bottom:10px; color:#0f172a; }
 .modal-card label { display:block; font-size:11px; color:#475569; margin-top:8px; }
@@ -893,6 +893,23 @@ function pickPreviewScalebarLength(umPerPx, targetPx) {
     return chosen;
 }
 
+// Format `section.meta.world_coords.msi_um_per_px` into a short label like
+// "50 μm/px" (square pixels) or "50×60 μm/px" (anisotropic). Used in both
+// the SectionPanel canvas-label (master + share recipient main view) and
+// the SharePreview cell title so recipients can verify the acquisition
+// resolution without opening the Align modal. Returns '' when pitch is
+// unset / invalid so callers can fall back to displayName-only.
+function formatPixelPitchLabel(sec) {
+    const wc = sec && sec.meta && sec.meta.world_coords;
+    const um = wc && wc.msi_um_per_px;
+    if (!um) return '';
+    const x = Number(um.x), y = Number(um.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) return '';
+    const fmt = v => Number.isInteger(v) ? String(v) : v.toFixed(1);
+    if (Math.abs(x - y) < 1e-6) return fmt(x) + ' μm/px';
+    return fmt(x) + '×' + fmt(y) + ' μm/px';
+}
+
 function pointInPolygon(x, y, vertices) {
     let inside = false;
     for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
@@ -1662,7 +1679,9 @@ class SectionPanel {
         // are intentionally absent.
         const label = document.createElement('div');
         label.className = 'canvas-label';
-        label.textContent = this.section.displayName || ('Section ' + (this.section.ordinal || ''));
+        const baseName0 = this.section.displayName || ('Section ' + (this.section.ordinal || ''));
+        const pitch0 = formatPixelPitchLabel(this.section);
+        label.textContent = pitch0 ? (baseName0 + ' · ' + pitch0) : baseName0;
         // master only: dblclick to rename. share-mode CSS hides the cursor
         // affordance and the listener short-circuits to avoid edits from
         // recipients.
@@ -1933,6 +1952,17 @@ class SectionPanel {
             if (r && r.naturalWidth > 0) return { w: r.naturalWidth, h: r.naturalHeight };
         }
         return { w: this.dom.cdisp.width, h: this.dom.cdisp.height };
+    }
+
+    // Re-render the canvas-label so displayName + pixel pitch reflect the
+    // latest section.meta.world_coords.msi_um_per_px / displayName. Called
+    // by App.renameSection and Align modal Save so the recipient (and the
+    // master) sees the new label without a full re-render.
+    refreshSectionLabel() {
+        if (!this._labelEl) return;
+        const baseName = this.section.displayName || ('Section ' + (this.section.ordinal || ''));
+        const pitch = formatPixelPitchLabel(this.section);
+        this._labelEl.textContent = pitch ? (baseName + ' · ' + pitch) : baseName;
     }
 
     // Pick the MSI layer that anchors cdisp sizing + T_he_to_msi lookup.
@@ -5322,6 +5352,9 @@ const Wizards = {
             writeWorldCoords();
             try { App.queueSave(0); } catch (e) {}
             try { panel.renderComposite(); } catch (e) {}
+            // Refresh the canvas-label so the new μm/px shows in the section
+            // header (and in the share-preview cell title via the next refresh).
+            try { panel.refreshSectionLabel && panel.refreshSectionLabel(); } catch (e) {}
             if (card._close) card._close('saved');
         });
 
@@ -7322,9 +7355,9 @@ const SharePreview = {
         const cells = sections.map((sec, idx) => {
             const safeName = String(sec.displayName || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
             const ent = (sec.msiSeries || {})[focusKey];
-            const projName = String(project.displayName || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
-            const captionParts = [projName, safeName].filter(Boolean);
-            const caption = captionParts.join('_');
+            const pitchRaw = formatPixelPitchLabel(sec);
+            const safePitch = String(pitchRaw || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+            const caption = safePitch ? (safeName + ' · ' + safePitch) : safeName;
             const panel = App.panels && App.panels.get(sec.id);
             let body;
             if (!ent || !panel || !panel.dom || !panel.dom.cdisp || panel.dom.cdisp.width === 0) {
@@ -8593,7 +8626,7 @@ const App = {
         sec.displayName = cleaned;
 
         const panel = this.panels.get(sectionId);
-        if (panel && panel._labelEl) panel._labelEl.textContent = cleaned;
+        if (panel && typeof panel.refreshSectionLabel === 'function') panel.refreshSectionLabel();
         if (typeof Toolbar !== 'undefined') {
             try { Toolbar.refreshSectionPicker(); } catch (e) {}
         }
@@ -10132,6 +10165,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-08-r14</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-08-r15</div>
 </body>
 </html>

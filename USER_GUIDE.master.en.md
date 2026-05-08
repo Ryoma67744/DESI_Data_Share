@@ -14,13 +14,16 @@ This guide is for the **master / admin** publishing data with DESI Data Share. I
 6. [Per-layer display settings (gear ⚙)](#6-per-layer-display-settings-gear-)
 7. [Drawing ROIs](#7-drawing-rois)
 8. [Filling in the Memo](#8-filling-in-the-memo)
-9. [Export ZIP — local backup & distribution](#9-export-zip--local-backup--distribution)
-10. [Publish to share](#10-publish-to-share)
-11. [Sharing the URL & passwords](#11-sharing-the-url--passwords)
-12. [What happens on re-publish](#12-what-happens-on-re-publish)
-13. [Upload progress / large files](#13-upload-progress--large-files)
-14. [Storage capacity](#14-storage-capacity)
-15. [Troubleshooting](#15-troubleshooting)
+9. [Renaming sections / compounds](#9-renaming-sections--compounds)
+10. [Export ZIP — local backup & distribution](#10-export-zip--local-backup--distribution)
+11. [Publish to share / Auto-publish / Sync indicator](#11-publish-to-share--auto-publish--sync-indicator)
+12. [Sharing the URL & passwords](#12-sharing-the-url--passwords)
+13. [What happens on re-publish](#13-what-happens-on-re-publish)
+14. [Cross-PC import (`?import=<slug>`)](#14-cross-pc-import-importslug)
+15. [IndexedDB persistence reliability](#15-indexeddb-persistence-reliability)
+16. [Upload progress / large files](#16-upload-progress--large-files)
+17. [Storage capacity](#17-storage-capacity)
+18. [Troubleshooting](#18-troubleshooting)
 
 ---
 
@@ -122,7 +125,19 @@ Click **`Align`** on a section panel to open a modal that aligns HE/IF layers to
 
 - The compound dropdown switches the MSI thumbnail.
 - **TIC (synthetic)** appears at the top whenever a section has many MRM transitions but no real `MSI_TIC` layer. It sums the luminance of every MSI series — handy as a high-contrast landmark target.
+- **Per-source TIC**: when the section has multiple sources, an extra `TIC_<filename>` row is inserted per source so you can pick the correct TIC for each acquisition (e.g. only the 1st-scan TIC).
 - All MSI thumbnails are tinted with the **Plasma colormap**, so signal regions are far easier to see than raw grayscale.
+
+### 5-1-bis. Source dropdown (per-source T_he_to_msi)
+
+The Align modal shows a **Source** dropdown at the top whenever a section has more than one MSI source.
+
+| Value | Behaviour |
+| --- | --- |
+| `__all__` (default) | One T is broadcast to **every source** under the section. Use it when sources represent the same physical scan. |
+| Specific fid (e.g. `Analyte 1.txt`) | T is stored per-source under `world_coords.T_he_to_msi_by_source[fid]`. Use it when sources have meaningfully different positions. |
+
+Save always also updates the legacy `T_he_to_msi`, so older viewers and the fallback path keep working. Compounds within the same source share the same T.
 
 ### 5-2. MSI pixel size
 
@@ -152,9 +167,11 @@ Click ≥ 3 corresponding points on each thumbnail, then **`Solve`** runs a comp
 ### 5-5. Cancel / Save
 
 - **Cancel**: Restore the snapshot taken when the modal opened (preview rolls back).
-- **Save**: Write the current values into `sec.meta.world_coords.T_he_to_msi` and `msi_um_per_px`, persist to IndexedDB, and refresh the ROI physical scale.
+- **Save**: Write the current values into `sec.meta.world_coords.T_he_to_msi` (+ `T_he_to_msi_by_source[fid]`) and `msi_um_per_px`, persist to IndexedDB, and refresh the ROI physical scale.
 
 > After Save, the main canvas renders **HE underneath, MSI on top (additive blend)** with a **scale bar** at the bottom-left. The bar auto-picks a round value (10 / 20 / 50 / 100 / 200 / 500 μm; 1 / 2 / 5 / 10 mm) and **shrinks the unit when you zoom in**.
+
+> Save also updates the section's top-left **canvas-label** to include the **Pixel pitch** (e.g. `Section 1 · 50 μm/px`). The same label is rendered for share recipients and inside the Preview overlay's cell titles, so collaborators can verify the acquisition resolution without opening the Align modal.
 
 ---
 
@@ -236,7 +253,29 @@ Values auto-save to IndexedDB (~400 ms debounce). On Publish they're also writte
 
 ---
 
-## 9. Export ZIP — local backup & distribution
+## 9. Renaming sections / compounds
+
+### 9-1. Rename a section (master only)
+
+**Double-click** the top-left **canvas-label** of any section panel (e.g. `Section 1`) to open a prompt and rename it (e.g. `260504_Killifish_Sec1`).
+
+- Master view only — share recipients ignore double-clicks.
+- Duplicate names within the same project are rejected.
+- The new name is `_flushSave`-d and **read back from IDB** before showing "Section 名を ... に変更しました". If persistence fails, an error banner appears.
+- Toolbar section picker, Preview cell title, stats column header and the Pixel pitch label all update immediately.
+
+### 9-2. Rename a compound (master only)
+
+**Double-click** the **Compound cell** in the Method (MRM) table to rename only the compound's display name. Precursor / Fragment / CE / CV are untouched.
+
+- The new name is broadcast to every section that holds the same compound key.
+- Persisted with verify-after-write; failures surface as a red error banner.
+
+> If a rename appears to revert after reload, hit F5; if it persists in IDB, the new name will be restored.
+
+---
+
+## 10. Export ZIP — local backup & distribution
 
 The **Export ZIP** button packages the entire project (images, MSI numerical data, ROIs, memo, alignment, etc.) into a single download. Unlike Publish, no server is involved; the receiver re-imports it later via **Import ZIP** in the same or another viewer instance.
 
@@ -310,7 +349,7 @@ Use the header's **Import ZIP**:
 
 ---
 
-## 10. Publish to share
+## 11. Publish to share / Auto-publish / Sync indicator
 
 The header's `Publish to share` button:
 
@@ -332,11 +371,33 @@ Pressing `Publish`:
 
 > Without the master password, a third party with only the anon key cannot publish or write to Storage. Authentication is enforced server-side via bcrypt in Supabase.
 
-> Read the next section about re-publish behaviour before re-running on a previously-published slug.
+> Read "13. What happens on re-publish" before re-running on a previously-published slug.
+
+### 11-1. Auto-publish on save
+
+Once a project has been published, every subsequent save (queueSave) automatically attempts to **re-publish in the background**. ROI / Memo / Align / rename changes flow to the server without you re-clicking `Publish to share`.
+
+- Master pw is cached in sessionStorage on the first publish — no re-prompt within the session.
+- Different tab / new session → next publish re-prompts (sync indicator turns `needs-master-pw`).
+
+### 11-2. Sync indicator
+
+A small **sync badge** sits in the header. Its color and label show the current auto-publish state.
+
+| State | Label | Meaning |
+| --- | --- | --- |
+| `synced` (green) | Synced | All saved + matches server. |
+| `uploading` (blue) | Uploading… | Publish in flight (storage upload + RPC). Returns to `synced` on success. |
+| `local-saved` (gray) | Local saved | IDB updated but server not yet. Next save retries publish. |
+| `conflict` (red) | Conflict | Another device published in the meantime (`updated_at` mismatch). Click to resolve via manual Publish. |
+| `needs-master-pw` (purple) | Master pw needed | sessionStorage has no master pw — click to re-enter. |
+| `error` (red) | Error | Publish failed. Click for a detailed toast. |
+
+- Closing the tab while sync isn't `synced` triggers the **beforeunload warning**.
 
 ---
 
-## 11. Sharing the URL & passwords
+## 12. Sharing the URL & passwords
 
 - URL: `https://.../viewer/index.html#share=<slug>`
 - Send the viewer password on a **separate channel** (Slack, e-mail)
@@ -346,7 +407,7 @@ Pressing `Publish`:
 
 ---
 
-## 12. What happens on re-publish
+## 13. What happens on re-publish
 
 ★ Important: **publishing the same slug a second time fully overwrites the server-side project.**
 
@@ -367,7 +428,37 @@ Caveats:
 
 ---
 
-## 13. Upload progress / large files
+## 14. Cross-PC import (`?import=<slug>`)
+
+When you `Open (master)` a server-only project from another PC / browser profile, the URL switches to `viewer/index.html?import=<slug>` and the first open prompts for the master password.
+
+| Step | Action |
+| --- | --- |
+| 1 | Click `Open (master)` on the manager page |
+| 2 | Viewer loads at `?import=<slug>` |
+| 3 | Master password modal — correct value triggers a Storage download of every blob |
+| 4 | Blobs land in IndexedDB; the master view boots normally |
+| 5 | Subsequent saves auto-publish, so the second PC stays in sync with the first |
+
+> The recommended workflow for one operator across multiple PCs: publish from PC A, `?import=` on PC B and continue editing, auto-publish, `?import=` on PC C, and so on.
+
+---
+
+## 15. IndexedDB persistence reliability
+
+After we observed a "Section 2 silently disappeared from IDB" event, the save path (queueSave / _flushSave) now has three layers of defence.
+
+| Layer | Detail |
+| --- | --- |
+| **Loud failure** | An IDB put failure (QuotaExceeded etc.) is no longer just `console.warn`-ed — a red error banner appears in the header, and the sync indicator turns `error`. |
+| **Verify after write** | Each put is followed by a `getProject(id)` read-back that confirms section count + the relevant displayName persisted. Mismatches surface via `_showSaveError`. |
+| **Quota monitoring** | `navigator.storage.estimate()` is polled proactively — at >80 % usage a warning toast appears. `navigator.storage.persist()` is requested so the OS doesn't silently evict the store. |
+| **3-retry exp backoff** | Put operations retry up to 3 times (200 ms → 400 ms → 800 ms). Permanent failure surfaces the same red banner. |
+| **beforeunload warning** | Closing the tab while there are unsaved changes / sync errors triggers a confirmation dialog. |
+
+---
+
+## 16. Upload progress / large files
 
 Already implemented:
 
@@ -383,7 +474,7 @@ Tips for large (~1.5 GB) projects:
 
 ---
 
-## 14. Storage capacity
+## 17. Storage capacity
 
 | Plan | Storage | Bandwidth | Monthly |
 | --- | --- | --- | --- |
@@ -396,7 +487,7 @@ Per-file size cap defaults to 50 MB on both plans, raisable to 5 GB from the das
 
 ---
 
-## 15. Troubleshooting
+## 18. Troubleshooting
 
 | Symptom | Action |
 | --- | --- |
