@@ -8922,9 +8922,16 @@ const SupabaseClient = (() => {
             return path;
         },
         publicUrl(bucket, path) {
-            const c = _client(); if (!c) return null;
-            const { data } = c.storage.from(bucket).getPublicUrl(path);
-            return data && data.publicUrl;
+            if (!SUPABASE_URL || !path) return null;
+            // Encode each path segment the same way uploadBlob does
+            // (encodeURIComponent per segment) so that the URL we fetch
+            // back maps to the exact key Storage stored the object under.
+            // supabase-js's getPublicUrl leaves special chars un-encoded,
+            // which produced 404s for slugs / filenames containing
+            // characters the browser doesn't auto-encode in URL paths.
+            const encodedPath = String(path).split('/').map(encodeURIComponent).join('/');
+            return SUPABASE_URL.replace(/\/+$/, '') + '/storage/v1/object/public/'
+                 + encodeURIComponent(bucket) + '/' + encodedPath;
         },
     };
 })();
@@ -9623,7 +9630,15 @@ const App = {
             for (let attempt = 0; attempt < 3; attempt++) {
                 try {
                     const resp = await fetch(url);
-                    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' for ' + path);
+                    if (!resp.ok) {
+                        // Include the HTTP status AND the encoded URL so
+                        // recipients can paste the failing URL into a
+                        // browser to confirm the 404 / RLS denial without
+                        // having to dig through the Network tab.
+                        const err = new Error('HTTP ' + resp.status + ' for ' + path + ' (url=' + url + ')');
+                        err.status = resp.status;
+                        throw err;
+                    }
                     return await resp.blob();
                 } catch (e) {
                     lastErr = e;
@@ -9730,7 +9745,15 @@ const App = {
             for (let attempt = 0; attempt < 3; attempt++) {
                 try {
                     const resp = await fetch(url);
-                    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' for ' + path);
+                    if (!resp.ok) {
+                        // Include the HTTP status AND the encoded URL so
+                        // recipients can paste the failing URL into a
+                        // browser to confirm the 404 / RLS denial without
+                        // having to dig through the Network tab.
+                        const err = new Error('HTTP ' + resp.status + ' for ' + path + ' (url=' + url + ')');
+                        err.status = resp.status;
+                        throw err;
+                    }
                     return await resp.blob();
                 } catch (e) {
                     lastErr = e;
@@ -10729,6 +10752,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-08-r22</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-08-r23</div>
 </body>
 </html>
