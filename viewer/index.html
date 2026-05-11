@@ -6413,25 +6413,25 @@ async function _publishCore(project, meta, masterPw, opts) {
         ? new Set()
         : new Set((project.shareInfo && project.shareInfo.uploadedPaths) || []);
 
-    const uploadTasks = [];
+    // ---- Stage A: enumerate every (section, key, ent) into pendingTasks
+    // and group by Storage path so a single source file shared by N MSI
+    // keys collapses to ONE upload at most. uploadedPaths is NOT consulted
+    // here — Stage B will verify cached paths still exist on Storage.
+    const pathTasks = new Map(); // path -> Task[]
     const sectionsPayload = [];
+    const enqueue = (sec, storage, kindFolder, slot, k, ent) => {
+        if (!ent || !ent.blobId) return;
+        const filename = (ent.filename) || (k + '.bin');
+        const path = `${meta.slug}/${sec.id}/${kindFolder}/${ent.blobId}__${filename}`;
+        const task = { blobId: ent.blobId, kindFolder, slot, key: k, ent, sectionId: sec.id, storage, path, filename };
+        let bucket = pathTasks.get(path);
+        if (!bucket) { bucket = []; pathTasks.set(path, bucket); }
+        bucket.push(task);
+    };
     for (const sec of project.sections) {
         const storage = { images: {}, msiSeries: {} };
-        const queue = (kindFolder, slot, k, ent) => {
-            if (!ent || !ent.blobId) return;
-            const filename = (ent.filename) || (k + '.bin');
-            const path = `${meta.slug}/${sec.id}/${kindFolder}/${ent.blobId}__${filename}`;
-            if (uploadedPaths.has(path)) {
-                // Already on the server at this exact path: just record
-                // the ref in the section payload, skip the network upload.
-                if (slot === 'msiSeries') storage[slot][k] = Object.assign({}, ent, { path, mime: ent.mime, filename });
-                else storage[slot][k] = { path, mime: ent.mime, filename };
-                return;
-            }
-            uploadTasks.push({ blobId: ent.blobId, kindFolder, slot, key: k, ent, sectionId: sec.id, storage, path, filename });
-        };
-        for (const [k, ent] of Object.entries(sec.images || {})) queue('images', 'images', k, ent);
-        for (const [k, ent] of Object.entries(sec.msiSeries || {})) queue('msi', 'msiSeries', k, ent);
+        for (const [k, ent] of Object.entries(sec.images || {})) enqueue(sec, storage, 'images', 'images', k, ent);
+        for (const [k, ent] of Object.entries(sec.msiSeries || {})) enqueue(sec, storage, 'msi', 'msiSeries', k, ent);
         sectionsPayload.push({
             id: sec.id,
             ordinal: sec.ordinal || 0,
@@ -6439,6 +6439,54 @@ async function _publishCore(project, meta, masterPw, opts) {
             meta: sec.meta || {},
             storagePaths: storage,
         });
+    }
+
+    // Helper: write the upload ref into every task that shares this path,
+    // so dedupe at upload time still produces a complete sectionsPayload.
+    const writeRefToTasks = (path, ref) => {
+        const tasks = pathTasks.get(path) || [];
+        for (const t of tasks) {
+            if (t.slot === 'msiSeries') t.storage[t.slot][t.key] = Object.assign({}, t.ent, ref);
+            else t.storage[t.slot][t.key] = ref;
+        }
+    };
+
+    // ---- Stage B: HEAD-verify every cached path. The cache claims they're
+    // already on Storage, but real-world drift (manual deletes, bucket
+    // migrations) can leave the DB pointing at missing objects. Drop those
+    // from the cache so they get re-uploaded in Stage C, instead of
+    // silently writing dead paths into the DB payload.
+    const candidatePaths = [];
+    for (const path of pathTasks.keys()) {
+        if (uploadedPaths.has(path)) candidatePaths.push(path);
+    }
+    if (candidatePaths.length) {
+        await runWithConcurrency(candidatePaths, 8, async (path) => {
+            const ok = await SupabaseClient.headObject('atlases', path);
+            if (ok) {
+                // Object exists — record the ref straight from cached metadata
+                // and skip the network upload for this path.
+                const tasks = pathTasks.get(path) || [];
+                if (!tasks.length) return;
+                const sample = tasks[0];
+                const ref = { path, mime: (sample.ent && sample.ent.mime), filename: sample.filename };
+                writeRefToTasks(path, ref);
+            } else {
+                // Cache lied — drop and let Stage C re-upload from IDB.
+                uploadedPaths.delete(path);
+            }
+        });
+    }
+
+    // ---- Stage C: upload every path that wasn't successfully verified in
+    // Stage B. uploadTasks holds one representative task per remaining
+    // path; uploadOne writes the resulting ref to ALL tasks sharing that
+    // path so the sectionsPayload ends up fully populated.
+    const uploadTasks = [];
+    for (const [path, tasks] of pathTasks.entries()) {
+        if (uploadedPaths.has(path)) continue; // verified in Stage B
+        if (!tasks.length) continue;
+        uploadTasks.push(tasks[0]);
     }
 
     let progress = null;
@@ -6463,8 +6511,7 @@ async function _publishCore(project, meta, masterPw, opts) {
         }
         if (lastErr) throw lastErr;
         const ref = { path: task.path, mime: blob.mime || (task.ent && task.ent.mime), filename: task.filename };
-        if (task.slot === 'msiSeries') task.storage[task.slot][task.key] = Object.assign({}, task.ent, ref);
-        else task.storage[task.slot][task.key] = ref;
+        writeRefToTasks(task.path, ref);
         uploadedPaths.add(task.path);
         doneCount++; doneBytes += size;
         if (progress) progress.update(doneCount, uploadTasks.length, doneBytes, totalBytes);
@@ -8958,6 +9005,21 @@ const SupabaseClient = (() => {
             return SUPABASE_URL.replace(/\/+$/, '') + '/storage/v1/object/public/'
                  + encodeURIComponent(bucket) + '/' + encodedPath;
         },
+        // Probe an object's existence in a public bucket. Returns true on
+        // HTTP 200, false on 404 / 403 / network errors / CORS. Used by
+        // _publishCore to self-heal a stale uploadedPaths cache: if the
+        // cached path is missing on Storage, drop it and re-upload.
+        async headObject(bucket, path) {
+            if (!SUPABASE_URL || !path) return false;
+            const url = this.publicUrl(bucket, path);
+            if (!url) return false;
+            try {
+                const resp = await fetch(url, { method: 'HEAD' });
+                return !!(resp && resp.ok);
+            } catch (e) {
+                return false;
+            }
+        },
     };
 })();
 
@@ -9682,6 +9744,17 @@ const App = {
                     }
                     return await resp.blob();
                 } catch (e) {
+                    // A bare TypeError from `fetch` (no `status` set, since
+                    // it didn't reach the !resp.ok branch above) is almost
+                    // always a CORS / network failure. Supabase Storage
+                    // omits CORS headers on its 404 response for missing
+                    // objects, so an absent file surfaces here as
+                    // net::ERR_FAILED rather than a clean HTTP 404.
+                    // Annotate the error so the recipient can distinguish
+                    // "object missing on Storage" from a real outage.
+                    if (e && !e.status) {
+                        try { e.message = (e.message || 'fetch failed') + ' (likely missing on Storage; ask master to re-publish)'; } catch (_) {}
+                    }
                     lastErr = e;
                     if (attempt < 2) await new Promise(r => setTimeout(r, 600 * Math.pow(2, attempt)));
                 }
@@ -9797,6 +9870,17 @@ const App = {
                     }
                     return await resp.blob();
                 } catch (e) {
+                    // A bare TypeError from `fetch` (no `status` set, since
+                    // it didn't reach the !resp.ok branch above) is almost
+                    // always a CORS / network failure. Supabase Storage
+                    // omits CORS headers on its 404 response for missing
+                    // objects, so an absent file surfaces here as
+                    // net::ERR_FAILED rather than a clean HTTP 404.
+                    // Annotate the error so the recipient can distinguish
+                    // "object missing on Storage" from a real outage.
+                    if (e && !e.status) {
+                        try { e.message = (e.message || 'fetch failed') + ' (likely missing on Storage; ask master to re-publish)'; } catch (_) {}
+                    }
                     lastErr = e;
                     if (attempt < 2) await new Promise(r => setTimeout(r, 600 * Math.pow(2, attempt)));
                 }
@@ -10793,6 +10877,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-08-r24</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-11-r25</div>
 </body>
 </html>
