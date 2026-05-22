@@ -6455,18 +6455,40 @@ function buildPixelGridFromRows(rowPositions) {
 
 function appendRoisToAnalyteLines(linesAll, parsed, roiPairs) {
     const { dataStartLine, precIdx, prodIdx, nameIdx } = parsed;
+    // The original Analyte dumps the user supplied have different column
+    // counts between metadata rows and data rows — the metadata rows stop
+    // at the last compound's m/z, while the data rows carry trailing
+    // bookkeeping cells (e.g. row index repeated, a constant "1"). A naive
+    // append therefore places the ROI label one column to the left of the
+    // ROI values. Find the widest data row and pad every other row to that
+    // width before appending so all ROI cells land in the same Excel column.
+    let maxCols = 0;
+    for (let i = dataStartLine; i < linesAll.length; i++) {
+        const line = linesAll[i];
+        if (!line || !line.trim()) continue;
+        const n = line.split('\t').length;
+        if (n > maxCols) maxCols = n;
+    }
+    if (maxCols === 0) maxCols = (linesAll[nameIdx] || '').split('\t').length;
+    const padToCols = (line, target) => {
+        if (line == null) return line;
+        const cur = line.split('\t').length;
+        return cur >= target ? line : line + '\t'.repeat(target - cur);
+    };
+    const appendCell = (line, cell) => padToCols(line, maxCols) + '\t' + cell;
+
     const out = linesAll.slice();
     // Single trailing column labelled "ROI" — downstream Excel / R / Python
     // sees a single string column with the ROI name per pixel.
-    out[nameIdx] = (out[nameIdx] || '') + '\tROI';
-    out[precIdx] = (out[precIdx] || '') + '\t0';
-    if (prodIdx !== precIdx) out[prodIdx] = (out[prodIdx] || '') + '\t0';
-    // Pad the remaining metadata rows with one empty cell so column counts
-    // stay aligned for spreadsheet viewers.
+    out[nameIdx] = appendCell(out[nameIdx], 'ROI');
+    out[precIdx] = appendCell(out[precIdx], '0');
+    if (prodIdx !== precIdx) out[prodIdx] = appendCell(out[prodIdx], '0');
+    // Pad the remaining metadata rows with an empty ROI cell so column
+    // counts stay aligned for spreadsheet viewers.
     for (let i = 0; i < dataStartLine; i++) {
         if (i === nameIdx || i === precIdx || i === prodIdx) continue;
         if (out[i] == null) continue;
-        out[i] = out[i] + '\t';
+        out[i] = appendCell(out[i], '');
     }
     // Pass 1: extract every data row's (world_x, world_y) so we can build
     // the same pixel grid the renderer used. The row→position map keeps
@@ -6497,7 +6519,7 @@ function appendRoisToAnalyteLines(linesAll, parsed, roiPairs) {
         for (const pair of roiPairs) {
             if (pointInPolygon(px, py, pair.poly)) { matched = pair.name; break; }
         }
-        out[i] = out[i] + '\t' + matched;
+        out[i] = appendCell(out[i], matched);
     }
     return out;
 }
@@ -6521,8 +6543,26 @@ function appendRoisToGenericLines(linesAll, roiPairs) {
     const yi = findCol('Image_Y', 'y', 'Y');
     if (xi < 0 || yi < 0) return null;
     const escape = sep === ',' ? csvEscape : (s) => s;
+
+    // Determine the canonical column count from the data rows so the ROI
+    // column aligns even when the header row is short of the data width.
+    let maxCols = 0;
+    for (let i = headerIdx + 1; i < linesAll.length; i++) {
+        const line = linesAll[i];
+        if (!line || !line.trim()) continue;
+        const n = splitBy(line).length;
+        if (n > maxCols) maxCols = n;
+    }
+    if (maxCols === 0) maxCols = header.length;
+    const padToCols = (line, target) => {
+        if (line == null) return line;
+        const cur = splitBy(line).length;
+        return cur >= target ? line : line + sep.repeat(target - cur);
+    };
+    const appendCell = (line, cell) => padToCols(line, maxCols) + sep + cell;
+
     const out = linesAll.slice();
-    out[headerIdx] = rawHeader + sep + 'ROI';
+    out[headerIdx] = appendCell(rawHeader, 'ROI');
     // Same pixel-grid translation as the Analyte path. Even Generic files
     // that name their columns "x" / "y" hold world coordinates, not the
     // raster's 0..W-1 indices that the polygon was drawn in.
@@ -6549,7 +6589,7 @@ function appendRoisToGenericLines(linesAll, roiPairs) {
         for (const pair of roiPairs) {
             if (pointInPolygon(px, py, pair.poly)) { matched = pair.name; break; }
         }
-        out[i] = out[i] + sep + escape(matched);
+        out[i] = appendCell(out[i], escape(matched));
     }
     return out;
 }
@@ -11243,6 +11283,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-22-r28</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-22-r29</div>
 </body>
 </html>
