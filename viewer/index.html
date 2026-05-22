@@ -2108,26 +2108,26 @@ class SectionPanel {
             const d = ctx.getImageData(0, 0, c.width, c.height).data;
             let mn = 255, mx = 0;
             const isMsi = /^MSI_/i.test(key);
-            const lums = isMsi ? [] : null;
             for (let i = 0; i < d.length; i += 4) {
                 if (isMsi && d[i + 3] === 0) continue;
                 const l = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
                 if (l < mn) mn = l;
                 if (l > mx) mx = l;
-                if (isMsi && l > 0) lums.push(l);
             }
-            let vmax = mx;
-            if (isMsi && lums.length) {
-                lums.sort((a, b) => a - b);
-                vmax = lums[Math.floor(lums.length * 0.98)];
-                if (!vmax) vmax = mx;
-            }
+            // Waters HDI parity: use the actual Min / Max of the raster
+            // as the initial display range. The previous code clipped the
+            // top 2 % of luminance values so outliers saturated to the
+            // brightest colormap entry; with that gone the colour bar
+            // tracks the full dynamic range and each pixel keeps a
+            // distinct colour — the speckle pattern that vendor software
+            // shows by default. Users can still narrow the range via the
+            // per-section Range input if they want a brighter view.
+            const vmax = mx;
             // Guard against degenerate cases (fully transparent MSI, decode
             // failure leaving mn=255/mx=0). Without this the Range input on
             // the section header ends up showing only the min value because
             // lumToRaw(NaN) propagates as '—' and the number input drops it.
             if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn > mx) { mn = 0; mx = 255; }
-            if (!Number.isFinite(vmax) || vmax <= mn) vmax = mx;
             this.imageSettings[key] = { opacity: 1.0, vmin: mn, vmax, actualMin: mn, actualMax: mx, grayscale: persistedGray, applyOpacity: persistedApply };
         }
     }
@@ -2353,26 +2353,25 @@ class SectionPanel {
                     const r = d[i], g = d[i+1], b = d[i+2], a = d[i+3];
                     const lum = 0.299*r + 0.587*g + 0.114*b;
                     const n = Math.max(0, Math.min(1, (lum - settings.vmin) / range));
-                    // Compositing rule (requirement: "完全な重ね合わせ" —
-                    // at 100 % MSI opacity HE is fully invisible inside the
-                    // MSI raster):
-                    //   - Out-of-grid pixels (a === 0; common in sparse
-                    //     scans where rasterRowsToPngDataUrl skips cells the
-                    //     scanner didn't visit) become an opaque backdrop so
-                    //     HE can't leak through the gaps.
-                    //   - In-raster near-zero pixels (lum < 1) also become
-                    //     the opaque backdrop so the colormap floor (Plasma
-                    //     navy / Hot black / Viridis purple) doesn't show as
-                    //     a tinted layer.
-                    //   - Backdrop color = getColormapBackground(): black for
-                    //     most colormaps, white for Grayscale (low=white) so
-                    //     the gap fill stays continuous with the LUT floor.
-                    //   - Signal pixels get the active colormap.
+                    // Compositing rule:
+                    //   - Out-of-grid pixels (a === 0; sparse scans where
+                    //     rasterRowsToPngDataUrl skipped cells the scanner
+                    //     never visited) become an opaque backdrop so HE
+                    //     can't leak through the gaps.
+                    //   - Every other in-raster pixel — including the very
+                    //     dim ones — goes through the colormap so weak
+                    //     signal stays visible at the LUT floor. Waters HDI
+                    //     parity: a previous `lum < 1` shortcut painted the
+                    //     bottom of the range as backdrop, which hid the
+                    //     fine speckle pattern present in the raw data.
+                    //   - Backdrop color = getColormapBackground(): black
+                    //     for most colormaps, white for Grayscale (low=white)
+                    //     so the gap fill stays continuous with the LUT floor.
                     // ctx.globalAlpha = settings.opacity then handles the
                     // blend with HE: 100 % covers HE completely inside the
                     // raster, lower opacity proportionally reveals HE
                     // through every in-raster pixel.
-                    if (a === 0 || lum < 1) {
+                    if (a === 0) {
                         d[i] = bg[0]; d[i+1] = bg[1]; d[i+2] = bg[2]; d[i+3] = 255;
                     } else {
                         const c = lut[Math.round(n * 255)];
@@ -3669,7 +3668,6 @@ class SectionPanel {
         for (let i = 0; i < d.length; i += 4) {
             if (d[i+3] === 0) continue;
             const lum = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-            if (lum < 1) { d[i] = bg[0]; d[i+1] = bg[1]; d[i+2] = bg[2]; continue; }
             const n = Math.max(0, Math.min(1, (lum - st.vmin) / range));
             const cm = lut[Math.round(n * 255)];
             d[i] = cm[0]; d[i+1] = cm[1]; d[i+2] = cm[2];
@@ -5400,7 +5398,6 @@ const Wizards = {
             for (let i = 0; i < d.length; i += 4) {
                 if (d[i+3] === 0) continue;
                 const lum = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-                if (lum < 1) { d[i] = bg[0]; d[i+1] = bg[1]; d[i+2] = bg[2]; continue; }
                 const n = Math.max(0, Math.min(1, (lum - v0) / range));
                 const cm = lut[Math.round(n * 255)];
                 d[i] = cm[0]; d[i+1] = cm[1]; d[i+2] = cm[2];
@@ -11304,6 +11301,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-22-r31</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-22-r32</div>
 </body>
 </html>
