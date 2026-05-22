@@ -24,6 +24,11 @@
     <style>
 html, body { margin: 0; padding: 0; overflow: hidden; height: 100vh; }
 body { font-family: 'Inter', sans-serif; background-color: #f4f4f5; }
+/* Default: never blur a canvas or image at the CSS layer. MSI rasters
+   are discrete intensity measurements, so any CSS-time bilinear scaling
+   would falsely smooth the data. Individual rules can override with
+   image-rendering: auto where smoothing is genuinely desired. */
+canvas, img { image-rendering: pixelated; }
 .btn { display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:12px; font-weight:500; border-radius:4px; border:1px solid #d1d5db; background:#fff; color:#374151; cursor:pointer; }
 .btn:hover { background:#f3f4f6; }
 .btn.primary { background:#2563eb; color:#fff; border-color:#2563eb; }
@@ -1034,7 +1039,7 @@ function bakeImageWithSectionTransform(src, deg, flipLr, flipUd) {
     const newH = Math.max(1, Math.round(w * sin + h * cos));
     const out = document.createElement('canvas');
     out.width = newW; out.height = newH;
-    const ctx = out.getContext('2d');
+    const ctx = get2dContext(out);
     ctx.translate(newW / 2, newH / 2);
     ctx.rotate(rad);
     if (flipLr || flipUd) ctx.scale(flipLr ? -1 : 1, flipUd ? -1 : 1);
@@ -1163,6 +1168,17 @@ function downloadAsFile(blob, fname) {
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+// Single chokepoint for every 2D canvas context. We always disable
+// bilinear smoothing here so that decoded TIFF strips, MSI rasters, the
+// HE→MSI bake in Align mode, and every other downstream drawImage land
+// in the destination 1:1. Call sites that genuinely want smoothing must
+// flip the flag back to true at the call site (intentional opt-in).
+function get2dContext(canvas, opts) {
+    const ctx = canvas.getContext('2d', opts);
+    if (ctx) ctx.imageSmoothingEnabled = false;
+    return ctx;
 }
 
 function readFileAsArrayBuffer(file) {
@@ -1386,7 +1402,7 @@ async function decodeJpegInTiffToDataUrl(buf, ifd) {
 
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
-    const ctx = canvas.getContext('2d');
+    const ctx = get2dContext(canvas);
 
     for (let i = 0; i < N; i++) {
         const off = stripOffsets[i], len = stripByteCounts[i];
@@ -1428,7 +1444,7 @@ async function decodeTiffArrayBufferToDataUrl(buf) {
     const t262 = (ifds[0].t262 && ifds[0].t262.length) ? ifds[0].t262[0] : 2;
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
-    const ctx = canvas.getContext('2d');
+    const ctx = get2dContext(canvas);
     const imgData = ctx.createImageData(W, H);
     const out = imgData.data;
     if (t262 === 8) {
@@ -1478,7 +1494,7 @@ async function decodeImageBlobToDataUrl(blob, mime) {
                 const bmp = await createImageBitmap(blob);
                 const c = document.createElement('canvas');
                 c.width = bmp.width; c.height = bmp.height;
-                c.getContext('2d').drawImage(bmp, 0, 0);
+                get2dContext(c).drawImage(bmp, 0, 0);
                 if (typeof bmp.close === 'function') bmp.close();
                 return c.toDataURL('image/png');
             } catch (_) { /* fall through to UTIF */ }
@@ -1633,7 +1649,7 @@ function rasterRowsToPngDataUrl(rows, range) {
     else if (!(vmax > vmin)) { vmin = 0; vmax = 1; }
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const ctx = get2dContext(canvas, { willReadFrequently: true });
     const imgData = ctx.createImageData(W, H);
     let p = 0;
     for (let i = 0; i < H; i++) for (let j = 0; j < W; j++) {
@@ -1931,8 +1947,8 @@ class SectionPanel {
             root, host, rot, cdisp, croi, scalebar,
             canvasCell, thumbsCell, layerBar, thumbs, label,
         };
-        this.displayCtx = cdisp.getContext('2d', { willReadFrequently: true });
-        this.roiCtx = croi.getContext('2d');
+        this.displayCtx = get2dContext(cdisp, { willReadFrequently: true });
+        this.roiCtx = get2dContext(croi);
 
         this.renderEmptyOverlay();
         this.applyViewerTransform();
@@ -2087,7 +2103,7 @@ class SectionPanel {
             }
             const c = document.createElement('canvas');
             c.width = img.naturalWidth; c.height = img.naturalHeight;
-            const ctx = c.getContext('2d', { willReadFrequently: true });
+            const ctx = get2dContext(c, { willReadFrequently: true });
             ctx.drawImage(img, 0, 0);
             const d = ctx.getImageData(0, 0, c.width, c.height).data;
             let mn = 255, mx = 0;
@@ -2326,7 +2342,7 @@ class SectionPanel {
             if (isMsiLayer) {
                 const tc = document.createElement('canvas');
                 tc.width = img.naturalWidth; tc.height = img.naturalHeight;
-                const tctx = tc.getContext('2d', { willReadFrequently: true });
+                const tctx = get2dContext(tc, { willReadFrequently: true });
                 tctx.drawImage(img, 0, 0);
                 const data = tctx.getImageData(0, 0, tc.width, tc.height);
                 const d = data.data;
@@ -2370,7 +2386,7 @@ class SectionPanel {
                 // preserved so any masked HE areas stay transparent.
                 const tc = document.createElement('canvas');
                 tc.width = img.naturalWidth; tc.height = img.naturalHeight;
-                const tctx = tc.getContext('2d', { willReadFrequently: true });
+                const tctx = get2dContext(tc, { willReadFrequently: true });
                 tctx.drawImage(img, 0, 0);
                 const data = tctx.getImageData(0, 0, tc.width, tc.height);
                 const d = data.data;
@@ -3641,7 +3657,7 @@ class SectionPanel {
         if (!im || !src || !src.complete || src.naturalWidth === 0) return;
         const c = document.createElement('canvas');
         c.width = src.naturalWidth; c.height = src.naturalHeight;
-        const ctx = c.getContext('2d', { willReadFrequently: true });
+        const ctx = get2dContext(c, { willReadFrequently: true });
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(src, 0, 0);
         const data = ctx.getImageData(0, 0, c.width, c.height);
@@ -3989,7 +4005,7 @@ function extractRoiPixelsFromSection(panel, layerKey, polyMsi) {
     const iw = img.naturalWidth, ih = img.naturalHeight;
     const c = document.createElement('canvas');
     c.width = iw; c.height = ih;
-    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const ctx = get2dContext(c, { willReadFrequently: true });
     ctx.drawImage(img, 0, 0);
     const data = ctx.getImageData(0, 0, iw, ih).data;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -4359,7 +4375,7 @@ function drawSectionMultiBar(canvas, sections, channels, stats, roi) {
     const W = Math.max(cw, sections.length * (channels.length * 18 + 30) + 80);
     const H = Math.max(ch, 220);
     canvas.width = W; canvas.height = H;
-    const ctx = canvas.getContext('2d');
+    const ctx = get2dContext(canvas);
     ctx.fillStyle = '#fafafa'; ctx.fillRect(0, 0, W, H);
 
     const margin = { top: 50, right: 20, bottom: 80, left: 65 };
@@ -5371,7 +5387,7 @@ const Wizards = {
             if (!srcImg || !srcImg.complete || !srcImg.naturalWidth) return null;
             const c = document.createElement('canvas');
             c.width = srcImg.naturalWidth; c.height = srcImg.naturalHeight;
-            const cctx = c.getContext('2d', { willReadFrequently: true });
+            const cctx = get2dContext(c, { willReadFrequently: true });
             cctx.imageSmoothingEnabled = false;
             cctx.drawImage(srcImg, 0, 0);
             const data = cctx.getImageData(0, 0, c.width, c.height);
@@ -5428,7 +5444,7 @@ const Wizards = {
             const heInMsi = document.createElement('canvas');
             heInMsi.width = Math.max(1, Math.round(msiW));
             heInMsi.height = Math.max(1, Math.round(msiH));
-            const tctx = heInMsi.getContext('2d');
+            const tctx = get2dContext(heInMsi);
             tctx.transform(T[0][0], T[1][0], T[0][1], T[1][1], T[0][2], T[1][2]);
             tctx.drawImage(heRaw, 0, 0);
             // Step 2: section transform bake (rotation + flip).
@@ -5477,7 +5493,7 @@ const Wizards = {
             const acc = new Float32Array(W * H);
             const tmp = document.createElement('canvas');
             tmp.width = W; tmp.height = H;
-            const tctx = tmp.getContext('2d', { willReadFrequently: true });
+            const tctx = get2dContext(tmp, { willReadFrequently: true });
             let added = 0;
             for (const { k, img, dk } of usable) {
                 if (dk !== bestDim) {
@@ -7540,7 +7556,7 @@ const SharePreview = {
                 const count = new Uint32Array(w * h);
                 const tc = document.createElement('canvas');
                 tc.width = w; tc.height = h;
-                const tctx = tc.getContext('2d', { willReadFrequently: true });
+                const tctx = get2dContext(tc, { willReadFrequently: true });
                 let summed = 0;
                 for (const key of msiKeys) {
                     const img = panel.imageSources[key];
@@ -7566,7 +7582,7 @@ const SharePreview = {
                 const norm = maxAvg > 0 ? 255 / maxAvg : 0;
                 const out = document.createElement('canvas');
                 out.width = w; out.height = h;
-                const octx = out.getContext('2d');
+                const octx = get2dContext(out);
                 const outData = octx.createImageData(w, h);
                 for (let p = 0, j = 0; p < w * h; p++, j += 4) {
                     if (count[p] === 0) {
@@ -8065,7 +8081,7 @@ const SharePreview = {
         if (!cv) return;
         cv.width = 18;
         cv.height = 256;
-        const ctx = cv.getContext('2d');
+        const ctx = get2dContext(cv);
         const img = ctx.createImageData(cv.width, cv.height);
         const lut = getActiveColormap();
         for (let y = 0; y < cv.height; y++) {
@@ -8262,7 +8278,7 @@ const SharePreview = {
         const newH = Math.max(1, Math.round(w * sin + h * cos));
         const out = document.createElement('canvas');
         out.width = newW; out.height = newH;
-        const ctx = out.getContext('2d');
+        const ctx = get2dContext(out);
         ctx.imageSmoothingEnabled = false;
         ctx.translate(newW / 2, newH / 2);
         ctx.rotate(rad);
@@ -9055,7 +9071,7 @@ const Toolbar = {
 
     _drawThumbInto(canvas, panel) {
         if (!canvas) return;
-        const ctx = canvas.getContext('2d');
+        const ctx = get2dContext(canvas);
         ctx.imageSmoothingEnabled = false;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = '#1f2937';
@@ -11288,6 +11304,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-22-r30</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-22-r31</div>
 </body>
 </html>
