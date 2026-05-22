@@ -6288,9 +6288,12 @@ async function exportProjectAsZip() {
             }
             usedPaths.add(relPath);
             groupPath.set(groupKey, relPath);
-            const augmented = ent.kind === 'xlsx'
-                ? await tryAppendUserRoiColumns(rec.blob, sec, ent, project)
-                : null;
+            let augmented = null;
+            if (ent.kind === 'xlsx') {
+                augmented = await tryAppendUserRoiColumns(rec.blob, sec, ent, project);
+            } else if (ent.kind === 'txt') {
+                augmented = await tryAppendUserRoiColumnsToTxt(rec.blob, sec, ent, project);
+            }
             zip.file(dir + relPath, augmented || rec.blob);
         }
         for (const [layerKey, ent] of Object.entries(sec.msiSeries || {})) {
@@ -6358,6 +6361,122 @@ async function tryAppendUserRoiColumns(srcBlob, section, msiEnt, project) {
         console.warn('[tryAppendUserRoiColumns] skipped:', e);
         return null;
     }
+}
+
+// TXT companion of tryAppendUserRoiColumns. Handles both Analyte-converted
+// MSI dumps (the "Analyte (converted from imzML)" marker on line 0, with
+// x = tok[1] / y = tok[2] at fixed positions) and Generic TSV/CSV layouts
+// (Image_X / Image_Y header lookup, same as buildPngFromTxtArrayBuffer).
+// Returns an ArrayBuffer of the augmented text, or null on any failure so
+// the caller falls back to the original blob — matches the xlsx helper's
+// contract.
+async function tryAppendUserRoiColumnsToTxt(srcBlob, section, msiEnt, project) {
+    try {
+        const rois = (project.rois || []).filter(r => r.polysBySection && r.polysBySection[section.id]);
+        if (!rois.length) return null;
+        const buf = await srcBlob.arrayBuffer();
+        const raw = new TextDecoder('utf-8').decode(buf);
+        // Preserve the dominant newline + trailing-newline so the round-trip
+        // doesn't silently rewrite a CRLF file into LF, or strip a final \n.
+        const eol = /\r\n/.test(raw) ? '\r\n' : '\n';
+        const endsWithNewline = /\r?\n$/.test(raw);
+        const linesAll = raw.split(/\r?\n/);
+        const roiLabels = rois.map(r => String(r.name || r.colorKey || '').replace(/[\t\r\n]+/g, ' '));
+        const polys = rois.map(r => r.polysBySection[section.id]);
+
+        let outLines = null;
+        const isAnalyteMarker = /Analyte\s*\(converted from imzML\)/i.test(linesAll[0] || '');
+        if (isAnalyteMarker) {
+            let parsed = null;
+            try { parsed = parseAnalyteHeader(buf); } catch (e) { parsed = null; }
+            if (parsed && parsed.nameIdx >= 0) outLines = appendRoisToAnalyteLines(linesAll, parsed, polys, roiLabels);
+        }
+        if (!outLines) {
+            outLines = appendRoisToGenericLines(linesAll, polys, roiLabels);
+        }
+        if (!outLines) return null;
+
+        let out = outLines.join(eol);
+        if (endsWithNewline && !/\r?\n$/.test(out)) out += eol;
+        return new TextEncoder().encode(out).buffer;
+    } catch (e) {
+        console.warn('[tryAppendUserRoiColumnsToTxt] skipped:', e);
+        return null;
+    }
+}
+
+function appendRoisToAnalyteLines(linesAll, parsed, polys, roiLabels) {
+    const { dataStartLine, precIdx, prodIdx, nameIdx } = parsed;
+    const out = linesAll.slice();
+    const zeros = roiLabels.map(() => '0').join('\t');
+    const blanks = roiLabels.map(() => '').join('\t');
+    const labels = roiLabels.join('\t');
+    // Place ROI names alongside compound names so the rightmost columns of
+    // the name row read "Histamine ... TDLN LN". precIdx / prodIdx get
+    // literal 0 so a future parseAnalyteHeader pass treats the ROI columns
+    // as non-compound padding (pre <= 0 → break the compound scan).
+    out[nameIdx] = (out[nameIdx] || '') + '\t' + labels;
+    out[precIdx] = (out[precIdx] || '') + '\t' + zeros;
+    if (prodIdx !== precIdx) out[prodIdx] = (out[prodIdx] || '') + '\t' + zeros;
+    // Pad the remaining metadata rows so every row above dataStartLine has
+    // the same column count — keeps spreadsheet viewers from looking ragged.
+    for (let i = 0; i < dataStartLine; i++) {
+        if (i === nameIdx || i === precIdx || i === prodIdx) continue;
+        if (out[i] == null) continue;
+        out[i] = out[i] + '\t' + blanks;
+    }
+    for (let i = dataStartLine; i < out.length; i++) {
+        const line = out[i];
+        if (!line || !line.trim()) continue;
+        const tok = line.split('\t');
+        if (tok.length < 4) continue;
+        const x = Number(tok[1]);
+        const y = Number(tok[2]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const cells = polys.map(p => pointInPolygon(x, y, p) ? '1' : '0');
+        out[i] = line + '\t' + cells.join('\t');
+    }
+    return out;
+}
+
+function appendRoisToGenericLines(linesAll, polys, roiLabels) {
+    const headerIdx = linesAll.findIndex(s => s != null && s.trim().length > 0);
+    if (headerIdx < 0) return null;
+    const rawHeader = linesAll[headerIdx];
+    // Mirror buildPngFromTxtArrayBuffer's separator detection. Whitespace-
+    // separated files are rejected because injecting ROI names containing
+    // spaces would silently corrupt re-import.
+    const sep = rawHeader.includes('\t') ? '\t' : (rawHeader.includes(',') ? ',' : null);
+    if (sep == null) return null;
+    const splitBy = (s) => s.split(sep);
+    const header = splitBy(rawHeader).map(s => s.trim());
+    const findCol = (...candidates) => {
+        for (const c of candidates) { const i = header.indexOf(c); if (i >= 0) return i; }
+        return -1;
+    };
+    const xi = findCol('Image_X', 'x', 'X');
+    const yi = findCol('Image_Y', 'y', 'Y');
+    if (xi < 0 || yi < 0) return null;
+    const escape = sep === ',' ? csvEscape : (s) => s;
+    const labels = roiLabels.map(escape).join(sep);
+    const out = linesAll.slice();
+    out[headerIdx] = rawHeader + sep + labels;
+    for (let i = headerIdx + 1; i < out.length; i++) {
+        const line = out[i];
+        if (!line || !line.trim()) continue;
+        const cols = splitBy(line);
+        if (cols.length <= Math.max(xi, yi)) continue;
+        const x = Number(cols[xi]);
+        const y = Number(cols[yi]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const cells = polys.map(p => pointInPolygon(x, y, p) ? '1' : '0');
+        out[i] = line + sep + cells.join(sep);
+    }
+    return out;
+}
+
+function csvEscape(s) {
+    return /[",\r\n]/.test(s) ? '"' + String(s).replace(/"/g, '""') + '"' : String(s);
 }
 
 // Best-effort MIME guess for Import when the ZIP entry doesn't carry one.
@@ -11045,6 +11164,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-11-r25</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-22-r26</div>
 </body>
 </html>
