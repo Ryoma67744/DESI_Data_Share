@@ -480,6 +480,17 @@ function renderFilterBar() {
     bar.innerHTML = html;
 }
 
+function compoundActions(c) {
+    return ''
+        + '<button class="btn mini" data-action="add-transition" data-id="' + safe(c.id) + '">+ トランジション</button> '
+        + '<button class="btn mini" data-action="edit-compound" data-id="' + safe(c.id) + '">編集</button> '
+        + '<button class="btn mini danger" data-action="del-compound" data-id="' + safe(c.id) + '">削除</button>';
+}
+function compoundBody(c) {
+    return (c.note ? '<p class="text-xs text-gray-600 mb-1 whitespace-pre-line">' + safe(c.note) + '</p>' : '') + transitionsHtml(c);
+}
+
+// One member block inside a multi-name (consolidated) unit.
 function memberHtml(c) {
     return ''
         + '<div class="cpd-member">'
@@ -489,29 +500,45 @@ function memberHtml(c) {
         +     (c.polarity ? '<span class="chip pol">' + safe(c.polarity) + '</span>' : '')
         +     (c.tags || []).map(t => '<span class="chip">' + safe(t) + '</span>').join('')
         +     '<span style="flex:1"></span>'
-        +     '<button class="btn mini" data-action="add-transition" data-id="' + safe(c.id) + '">+ トランジション</button> '
-        +     '<button class="btn mini" data-action="edit-compound" data-id="' + safe(c.id) + '">編集</button> '
-        +     '<button class="btn mini danger" data-action="del-compound" data-id="' + safe(c.id) + '">削除</button>'
+        +     compoundActions(c)
         +   '</div>'
-        +   (c.note ? '<p class="text-xs text-gray-600 mb-1 whitespace-pre-line">' + safe(c.note) + '</p>' : '')
-        +   transitionsHtml(c)
+        +   compoundBody(c)
         + '</div>';
 }
 
 function unitHtml(u) {
     const serialBadge = (u.serial_no != null) ? '<span class="serial-badge">#' + safe(u.serial_no) + '</span>' : '';
-    const names = u.members.map(m => safe(m.name)).join(' / ');
     const tagChips = (u.tags || []).map(t => '<span class="chip">' + safe(t) + '</span>').join('') || '<span class="chip gray">未分類</span>';
+    const countLbl = '<span class="text-xs muted">' + u.nTr + ' transition' + (u.nTr === 1 ? '' : 's')
+        + (u.members.length > 1 ? ' ・ ' + u.members.length + ' 名称' : '') + '</span>';
+    // Single-name compound: surface the action buttons in the (always-visible)
+    // summary so editing/renaming needs no expand. Clicks on buttons inside a
+    // <summary> are stopped from toggling the <details> in bindLibraryEvents.
+    if (u.members.length === 1) {
+        const c = u.members[0];
+        const pol = c.polarity ? '<span class="chip pol">' + safe(c.polarity) + '</span>' : '';
+        return ''
+            + '<details class="cpd">'
+            +   '<summary>'
+            +     serialBadge
+            +     '<span class="font-semibold">' + safe(c.name) + '</span>'
+            +     tagChips + pol + countLbl
+            +     '<span style="flex:1"></span>'
+            +     compoundActions(c)
+            +   '</summary>'
+            +   '<div class="cpd-body">' + compoundBody(c) + '</div>'
+            + '</details>';
+    }
+    // Consolidated unit (>=2 names sharing a serial_no): auto-expand, per-member
+    // action buttons in the body.
+    const names = u.members.map(m => safe(m.name)).join(' / ');
     const pol = Array.from(u.polarities).map(p => '<span class="chip pol">' + safe(p) + '</span>').join('');
-    const multi = u.members.length > 1;
     return ''
-        + '<details class="cpd"' + (multi ? ' open' : '') + '>'
+        + '<details class="cpd" open>'
         +   '<summary>'
         +     serialBadge
         +     '<span class="font-semibold">' + names + '</span>'
-        +     tagChips + pol
-        +     '<span class="text-xs muted">' + u.nTr + ' transition' + (u.nTr === 1 ? '' : 's')
-        +       (multi ? ' ・ ' + u.members.length + ' 名称' : '') + '</span>'
+        +     tagChips + pol + countLbl
         +   '</summary>'
         +   '<div class="cpd-body">' + u.members.map(memberHtml).join('') + '</div>'
         + '</details>';
@@ -771,6 +798,6 @@ document.addEventListener('DOMContentLoaded', () => { init().catch(e => { consol
 </script>
 <!-- Build tag: bumped on every push so a maintainer / recipient can spot a
      stale cached copy. -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-26-mrm-r2</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-26-mrm-r3</div>
 </body>
 </html>
