@@ -67,6 +67,7 @@
       <p class="text-xs text-gray-500 mt-1">プロジェクト管理</p>
     </div>
     <div class="flex items-center gap-2">
+      <button id="btn-mrm" class="btn" title="MRM 管理ライブラリ (化合物・トランジション・使用履歴)">MRM管理</button>
       <button id="btn-help" class="btn">Help</button>
     </div>
   </header>
@@ -880,6 +881,9 @@ async function init() {
         // audience is 'manage' since this page IS the management screen.
         openHelpModal('manage').catch(e => console.error(e));
     });
+    document.getElementById('btn-mrm').addEventListener('click', () => {
+        location.href = 'mrm.html';
+    });
 
     await renderList();
     // Try a silent server pull if we have a cached owner pw and the
@@ -900,6 +904,6 @@ document.addEventListener('DOMContentLoaded', () => { init().catch(e => { consol
 </script>
 <!-- Build tag: bumped on every push so a maintainer / recipient can spot a
      stale cached copy. Same value as viewer/index.html, kept in sync by hand. -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-08-r24</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-26-r25</div>
 </body>
 </html>

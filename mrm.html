@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+<title>DESI Data Share — MRM管理</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+  // Keep these in sync with index.html / viewer/index.html. Same Supabase
+  // project, same anon key.
+  window.SUPABASE_URL      = "https://pxlrlhtcvwkqnlryencs.supabase.co";
+  window.SUPABASE_ANON_KEY = "sb_publishable_2K4sqMmKk3g20Jmwho-awQ_Uu_hSKeU";
+</script>
+<style>
+  body { background:#f8fafc; color:#0f172a; }
+  .card { background:#fff; border:1px solid #e5e7eb; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.04); }
+  .btn { font-size:12px; padding:6px 12px; border:1px solid #cbd5e1; background:#fff; border-radius:4px; cursor:pointer; color:#1e293b; }
+  .btn:hover { background:#eef2ff; color:#1d4ed8; }
+  .btn:disabled { opacity:0.5; cursor:not-allowed; }
+  .btn.primary { background:#2563eb; border-color:#2563eb; color:#fff; }
+  .btn.primary:hover { background:#1d4ed8; }
+  .btn.danger { background:#fff; border-color:#fca5a5; color:#b91c1c; }
+  .btn.danger:hover { background:#fee2e2; }
+  .btn.mini { font-size:11px; padding:2px 8px; }
+  .chip { display:inline-block; padding:1px 8px; border-radius:9999px; font-size:10px; font-weight:600; background:#e0e7ff; color:#3730a3; margin-right:4px; }
+  .chip.gray { background:#e5e7eb; color:#374151; }
+  .chip.pol { background:#dcfce7; color:#166534; }
+  .star { color:#f59e0b; font-weight:700; }
+  .row label { display:block; font-size:11px; color:#475569; margin-top:8px; }
+  .row input, .row select, .row textarea {
+      width:100%; padding:5px 7px; border:1px solid #cbd5e1; border-radius:4px;
+      font-size:13px; margin-top:2px; background:#fff;
+  }
+  .row .inline { display:flex; gap:8px; }
+  .row .inline > label { flex:1; }
+  .row textarea { font-family:ui-monospace, SFMono-Regular, monospace; min-height:54px; }
+  .modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:60; display:flex; align-items:center; justify-content:center; }
+  .modal-card { background:#fff; border-radius:8px; box-shadow:0 12px 30px rgba(0,0,0,0.2); padding:18px 22px; width:520px; max-width:94vw; max-height:90vh; overflow-y:auto; }
+  .modal-card h2 { font-size:14px; font-weight:600; margin-bottom:8px; }
+  .modal-card .actions { display:flex; gap:6px; justify-content:flex-end; margin-top:14px; }
+  .modal-card .err { color:#b91c1c; font-size:11px; min-height:1em; margin-top:6px; }
+  .tag-group { margin-bottom:18px; }
+  .tag-group > h2 { font-size:13px; font-weight:700; color:#0f172a; margin:0 0 6px; padding-bottom:4px; border-bottom:1px solid #e2e8f0; }
+  details.cpd { border:1px solid #e5e7eb; border-radius:6px; background:#fff; margin-bottom:6px; }
+  details.cpd > summary { cursor:pointer; padding:7px 10px; list-style:none; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  details.cpd > summary::-webkit-details-marker { display:none; }
+  details.cpd[open] > summary { border-bottom:1px solid #f1f5f9; background:#f8fafc; border-radius:6px 6px 0 0; }
+  .cpd-body { padding:8px 10px; }
+  table.tr-table { width:100%; border-collapse:collapse; font-size:12px; }
+  table.tr-table th, table.tr-table td { border-bottom:1px solid #f1f5f9; padding:4px 6px; text-align:right; }
+  table.tr-table th:first-child, table.tr-table td:first-child,
+  table.tr-table th.l, table.tr-table td.l { text-align:left; }
+  table.tr-table thead th { color:#64748b; font-weight:600; background:#f8fafc; }
+  .usage-list { margin:4px 0 0; padding-left:0; list-style:none; font-size:11px; color:#475569; }
+  .usage-list li { padding:1px 0; }
+  .usage-list a { color:#2563eb; text-decoration:underline; cursor:pointer; }
+  .src-badge { font-size:9px; padding:0 5px; border-radius:9999px; background:#f1f5f9; color:#64748b; margin-left:4px; }
+  .muted { color:#94a3b8; }
+</style>
+</head>
+<body class="min-h-screen">
+<div id="app" class="max-w-5xl mx-auto px-6 py-8">
+  <header class="flex items-center justify-between gap-4 mb-4">
+    <div>
+      <h1 class="text-xl font-bold">MRM管理</h1>
+      <p class="text-xs text-gray-500 mt-1">測定に使えるMRM (プリカーサー / フラグメント / CE / CV) を化合物・タグ別に登録し、使用したプロジェクト/サンプルへ遡れます</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <button id="btn-back" class="btn">← Projects</button>
+    </div>
+  </header>
+
+  <div class="card p-4 mb-4">
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <div class="flex gap-2">
+        <button id="btn-add-compound" class="btn primary">+ 化合物</button>
+        <button id="btn-reload" class="btn">再読込</button>
+      </div>
+      <div class="flex-1 min-w-[200px] max-w-md">
+        <input id="search" type="search" placeholder="検索: 化合物名 / タグ / プロジェクト / サンプル"
+               style="width:100%;padding:6px 9px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;">
+      </div>
+    </div>
+  </div>
+
+  <div id="lib" class="space-y-2">
+    <p class="text-sm text-gray-500 px-1">読み込み中…</p>
+  </div>
+</div>
+
+<div id="modal-host"></div>
+
+<script>
+'use strict';
+
+// ===========================================================================
+// Minimal Supabase client — MRM library RPCs + the master-pw verifier.
+// Mirrors index.html's SupabaseClient pattern.
+// ===========================================================================
+const SupabaseClient = (() => {
+    let client = null;
+    function _client() {
+        if (client) return client;
+        if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) return null;
+        if (typeof supabase === 'undefined' || !supabase.createClient) return null;
+        client = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, { auth: { persistSession: false } });
+        return client;
+    }
+    async function rpc(name, args) {
+        const c = _client();
+        if (!c) throw new Error('supabase_not_configured');
+        const { data, error } = await c.rpc(name, args || {});
+        if (error) throw error;
+        return data;
+    }
+    return {
+        configured() { return !!_client(); },
+        verifyMasterPw(pw) { return rpc('verify_master_pw', { _pw: pw }); },
+        listMrmLibrary(pw) { return rpc('list_mrm_library', { _master_pw: pw }); },
+        upsertCompound(pw, name, tags, polarity, note) {
+            return rpc('upsert_compound', { _master_pw: pw, _name: name, _tags: tags || [], _polarity: polarity || null, _note: note || null });
+        },
+        updateCompound(pw, id, name, tags, polarity, note) {
+            return rpc('update_compound', { _master_pw: pw, _id: id, _name: name, _tags: tags || [], _polarity: polarity || null, _note: note || null });
+        },
+        deleteCompound(pw, id) { return rpc('delete_compound', { _master_pw: pw, _id: id }); },
+        upsertTransition(pw, t) {
+            return rpc('upsert_transition', {
+                _master_pw: pw, _compound_id: t.compound_id,
+                _precursor: t.precursor, _product: t.product, _ce: t.ce, _cv: t.cv,
+                _role: t.role || null, _is_recommended: !!t.is_recommended,
+                _intensity_note: t.intensity_note || null, _note: t.note || null,
+            });
+        },
+        updateTransition(pw, id, t) {
+            return rpc('update_transition', {
+                _master_pw: pw, _id: id,
+                _precursor: t.precursor, _product: t.product, _ce: t.ce, _cv: t.cv,
+                _role: t.role || null, _is_recommended: !!t.is_recommended,
+                _intensity_note: t.intensity_note || null, _note: t.note || null,
+            });
+        },
+        deleteTransition(pw, id) { return rpc('delete_transition', { _master_pw: pw, _id: id }); },
+        recordUsage(pw, u) {
+            return rpc('record_usage', {
+                _master_pw: pw, _transition_id: u.transition_id,
+                _project_slug: u.project_slug || null, _project_name: u.project_name || null,
+                _sample_name: u.sample_name || null, _source: u.source || 'manual',
+            });
+        },
+    };
+})();
+
+// ===========================================================================
+// Master-mode gate — copied from index.html so behaviour is identical. The
+// 12 h unlock state + cached master pw are shared via sessionStorage, so a
+// user who unlocked on the project manager is not prompted again here.
+// ===========================================================================
+const MASTER_UNLOCK_KEY = 'desi:masterUnlocked';
+const MASTER_UNLOCK_TTL_MS = 12 * 60 * 60 * 1000;
+const MASTER_FALLBACK_HASH_HEX =
+    'd453b548866689313ef7ee5b37cb869f342e5cd555c704c3298c1534d510cd6a';
+
+async function sha256Hex(s) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(s)));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function isMasterUnlocked() {
+    try {
+        const raw = sessionStorage.getItem(MASTER_UNLOCK_KEY);
+        if (!raw) return false;
+        const p = JSON.parse(raw);
+        return !!(p && p.expiresAt && Date.now() < p.expiresAt);
+    } catch (e) { return false; }
+}
+function markMasterUnlocked(pw) {
+    try {
+        sessionStorage.setItem(MASTER_UNLOCK_KEY, JSON.stringify({
+            unlockedAt: Date.now(), expiresAt: Date.now() + MASTER_UNLOCK_TTL_MS,
+        }));
+    } catch (e) {}
+    if (pw) {
+        try {
+            sessionStorage.setItem('desi:masterPw', JSON.stringify({
+                pw, expiresAt: Date.now() + MASTER_UNLOCK_TTL_MS,
+            }));
+        } catch (e) {}
+    }
+}
+function _readCachedMasterPw() {
+    try {
+        const raw = sessionStorage.getItem('desi:masterPw');
+        if (!raw) return '';
+        const p = JSON.parse(raw);
+        return (p && p.expiresAt > Date.now()) ? (p.pw || '') : '';
+    } catch (e) { return ''; }
+}
+async function tryServerUnlock(pw) {
+    if (!SupabaseClient.configured()) return { ok: false, transient: true };
+    try {
+        const ok = await SupabaseClient.verifyMasterPw(pw);
+        return ok === true ? { ok: true } : { ok: false, transient: false };
+    } catch (e) {
+        console.warn('verify_master_pw failed (will try local hash):', e);
+        return { ok: false, transient: true };
+    }
+}
+async function tryLocalUnlock(pw) {
+    try { return (await sha256Hex(pw)) === MASTER_FALLBACK_HASH_HEX; }
+    catch (e) { return false; }
+}
+function openMasterUnlockModal() {
+    const html = `
+        <h2>パスワードを入力してください</h2>
+        <p style="font-size:12px;color:#475569;margin-top:4px;">MRM管理に入るには admin password が必要です。</p>
+        <form class="row">
+          <label>Password <input type="password" name="pw" autocomplete="current-password" required></label>
+          <p class="err" data-err></p>
+          <div class="actions"><button type="submit" class="btn primary" data-modal-ok>Unlock</button></div>
+        </form>`;
+    return new Promise((resolve) => {
+        const host = document.getElementById('modal-host');
+        const back = document.createElement('div'); back.className = 'modal-backdrop';
+        const card = document.createElement('div'); card.className = 'modal-card'; card.innerHTML = html;
+        back.appendChild(card); host.appendChild(back);
+        back.addEventListener('click', (e) => { if (e.target === back) e.stopPropagation(); });
+        const errEl = card.querySelector('[data-err]');
+        const submit = card.querySelector('[data-modal-ok]');
+        const inp = card.querySelector('[name="pw"]');
+        setTimeout(() => inp.focus(), 30);
+        const tryUnlock = async () => {
+            const pw = (inp.value || '').trim();
+            if (!pw) { errEl.textContent = 'パスワードを入力してください'; return; }
+            submit.disabled = true; submit.textContent = '確認中…'; errEl.textContent = '';
+            const server = await tryServerUnlock(pw);
+            let ok = server.ok;
+            if (!ok && server.transient) ok = await tryLocalUnlock(pw);
+            submit.disabled = false; submit.textContent = 'Unlock';
+            if (ok) { markMasterUnlocked(pw); back.remove(); resolve(true); }
+            else { errEl.textContent = 'パスワードが違います'; inp.select(); }
+        };
+        card.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); tryUnlock(); });
+    });
+}
+async function requireMasterUnlock() {
+    if (isMasterUnlocked()) return true;
+    return openMasterUnlockModal();
+}
+
+// ===========================================================================
+// Generic modal (mirrors index.html's openModal: [data-modal-ok] triggers
+// card._collect(); a null/false return keeps the modal open for validation).
+// ===========================================================================
+function openModal(html) {
+    return new Promise((resolve) => {
+        const host = document.getElementById('modal-host');
+        const back = document.createElement('div'); back.className = 'modal-backdrop';
+        const card = document.createElement('div'); card.className = 'modal-card'; card.innerHTML = html;
+        back.appendChild(card); host.appendChild(back);
+        const close = (val) => { back.remove(); resolve(val); };
+        card.querySelectorAll('[data-modal-cancel]').forEach(b => b.addEventListener('click', () => close(null)));
+        back.addEventListener('click', (e) => { if (e.target === back) close(null); });
+        card._close = close;
+        const submit = card.querySelector('[data-modal-ok]');
+        if (submit) submit.addEventListener('click', () => {
+            const result = card._collect ? card._collect() : true;
+            if (result === false || result == null) return;
+            close(result);
+        });
+        const form = card.querySelector('form');
+        if (form) form.addEventListener('submit', (e) => { e.preventDefault(); if (submit) submit.click(); });
+        const focusEl = card.querySelector('input, select, textarea');
+        if (focusEl) setTimeout(() => focusEl.focus(), 30);
+        openModal._card = card;
+    });
+}
+
+// ===========================================================================
+// Library state + rendering
+// ===========================================================================
+const safe = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const UNTAGGED = '(未分類)';
+
+let library = [];        // [{id,name,tags[],polarity,note,transitions:[{...,usages:[...]}]}]
+let searchText = '';
+
+function parseTags(s) {
+    const out = [];
+    for (const raw of String(s || '').split(/[,、\s]+/)) {
+        const t = raw.trim();
+        if (t && !out.includes(t)) out.push(t);
+    }
+    return out;
+}
+function fmtNum(n) { return (n == null || n === '') ? '—' : String(n); }
+function findCompound(id) { return library.find(c => c.id === id) || null; }
+function findTransition(tid) {
+    for (const c of library) { const t = (c.transitions || []).find(x => x.id === tid); if (t) return { compound: c, transition: t }; }
+    return null;
+}
+
+async function loadLibrary() {
+    const host = document.getElementById('lib');
+    if (!SupabaseClient.configured()) {
+        host.innerHTML = '<div class="card p-6 text-center text-sm text-red-600">Supabase が未設定です (SUPABASE_URL / ANON_KEY)。</div>';
+        return;
+    }
+    const pw = _readCachedMasterPw();
+    if (!pw) { host.innerHTML = '<div class="card p-6 text-center text-sm text-gray-500">認証が切れました。再読込してください。</div>'; return; }
+    host.innerHTML = '<p class="text-sm text-gray-500 px-1">読み込み中…</p>';
+    try {
+        const rows = await SupabaseClient.listMrmLibrary(pw);
+        library = Array.isArray(rows) ? rows : [];
+        renderLibrary();
+    } catch (e) {
+        console.warn('list_mrm_library failed', e);
+        const msg = String((e && (e.message || e.details)) || '');
+        host.innerHTML = '<div class="card p-6 text-center text-sm text-red-600">取得に失敗しました'
+            + (/unauthorized|28000/i.test(msg) ? ' (master password 違い?)' : ': ' + safe(msg)) + '</div>';
+    }
+}
+
+function usagesHtml(tr) {
+    const us = tr.usages || [];
+    if (!us.length) return '<div class="usage-list muted">使用履歴なし</div>';
+    const items = us.map(u => {
+        const proj = u.project_slug
+            ? '<a data-action="open-usage" data-slug="' + safe(u.project_slug) + '">' + safe(u.project_name || u.project_slug) + ' ↗</a>'
+            : '<span>' + safe(u.project_name || '(プロジェクト名なし)') + '</span>';
+        const sample = u.sample_name ? ' / ' + safe(u.sample_name) : '';
+        const date = u.created_at ? String(u.created_at).slice(0, 10) : '';
+        return '<li>' + proj + sample + '<span class="src-badge">' + safe(u.source || '') + '</span>'
+            + (date ? ' <span class="muted">' + safe(date) + '</span>' : '') + '</li>';
+    }).join('');
+    return '<ul class="usage-list">' + items + '</ul>';
+}
+
+function transitionsHtml(c) {
+    const trs = c.transitions || [];
+    if (!trs.length) return '<p class="text-xs muted">トランジション未登録</p>';
+    const rows = trs.map(tr => {
+        const star = tr.is_recommended ? '<span class="star" title="推奨">★</span>' : '';
+        const note = tr.intensity_note ? safe(tr.intensity_note) : '<span class="muted">—</span>';
+        return ''
+            + '<tr>'
+            + '<td>' + fmtNum(tr.precursor) + '</td>'
+            + '<td>' + fmtNum(tr.product) + '</td>'
+            + '<td>' + fmtNum(tr.ce) + '</td>'
+            + '<td>' + fmtNum(tr.cv) + '</td>'
+            + '<td class="l">' + safe(tr.role || '') + ' ' + star + '</td>'
+            + '<td class="l">' + note + '</td>'
+            + '<td class="l" style="white-space:nowrap;">'
+            +   '<button class="btn mini" data-action="add-usage" data-tid="' + safe(tr.id) + '" title="使用履歴を手動追加">+履歴</button> '
+            +   '<button class="btn mini" data-action="edit-transition" data-tid="' + safe(tr.id) + '">編集</button> '
+            +   '<button class="btn mini danger" data-action="del-transition" data-tid="' + safe(tr.id) + '">削除</button>'
+            + '</td>'
+            + '</tr>'
+            + '<tr><td colspan="7" class="l" style="padding-top:0;">' + usagesHtml(tr) + '</td></tr>';
+    }).join('');
+    return ''
+        + '<table class="tr-table">'
+        + '<thead><tr><th>Precursor</th><th>Fragment</th><th>CE</th><th>CV</th><th class="l">Role</th><th class="l">強度メモ</th><th class="l"></th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table>';
+}
+
+function compoundHtml(c) {
+    const tagChips = (c.tags || []).map(t => '<span class="chip">' + safe(t) + '</span>').join('') || '<span class="chip gray">未分類</span>';
+    const pol = c.polarity ? '<span class="chip pol">' + safe(c.polarity) + '</span>' : '';
+    const nTr = (c.transitions || []).length;
+    return ''
+        + '<details class="cpd" data-id="' + safe(c.id) + '">'
+        +   '<summary>'
+        +     '<span class="font-semibold">' + safe(c.name) + '</span>'
+        +     tagChips + pol
+        +     '<span class="text-xs muted">' + nTr + ' transition' + (nTr === 1 ? '' : 's') + '</span>'
+        +     '<span style="flex:1"></span>'
+        +     '<button class="btn mini" data-action="add-transition" data-id="' + safe(c.id) + '">+ トランジション</button> '
+        +     '<button class="btn mini" data-action="edit-compound" data-id="' + safe(c.id) + '">編集</button> '
+        +     '<button class="btn mini danger" data-action="del-compound" data-id="' + safe(c.id) + '">削除</button>'
+        +   '</summary>'
+        +   '<div class="cpd-body">'
+        +     (c.note ? '<p class="text-xs text-gray-600 mb-1 whitespace-pre-line">' + safe(c.note) + '</p>' : '')
+        +     transitionsHtml(c)
+        +   '</div>'
+        + '</details>';
+}
+
+function renderLibrary() {
+    const host = document.getElementById('lib');
+    const q = (searchText || '').trim().toLowerCase();
+    const match = (c) => {
+        if (!q) return true;
+        if ((c.name || '').toLowerCase().includes(q)) return true;
+        if ((c.tags || []).some(t => (t || '').toLowerCase().includes(q))) return true;
+        for (const tr of (c.transitions || []))
+            for (const u of (tr.usages || []))
+                if ((u.project_name || '').toLowerCase().includes(q) || (u.sample_name || '').toLowerCase().includes(q)) return true;
+        return false;
+    };
+    const compounds = (library || []).filter(match);
+    if (!compounds.length) {
+        host.innerHTML = '<div class="card p-6 text-center text-sm text-gray-500">'
+            + (library.length ? '一致する化合物がありません。' : 'まだ登録がありません。「+ 化合物」で追加するか、結果画面の Method 表から登録してください。')
+            + '</div>';
+        return;
+    }
+    // Group by tag — a compound with multiple tags appears under each.
+    const groups = new Map();
+    for (const c of compounds) {
+        const tags = (c.tags && c.tags.length) ? c.tags : [UNTAGGED];
+        for (const t of tags) { if (!groups.has(t)) groups.set(t, []); groups.get(t).push(c); }
+    }
+    const tagNames = Array.from(groups.keys()).sort((a, b) => {
+        if (a === UNTAGGED) return 1; if (b === UNTAGGED) return -1;
+        return a.localeCompare(b, 'ja');
+    });
+    host.innerHTML = tagNames.map(t => {
+        const list = groups.get(t).map(compoundHtml).join('');
+        return '<div class="tag-group"><h2>' + safe(t) + ' <span class="muted" style="font-weight:400;">(' + groups.get(t).length + ')</span></h2>' + list + '</div>';
+    }).join('');
+}
+
+// ===========================================================================
+// Modals: compound / transition / usage
+// ===========================================================================
+async function openCompoundModal(existing) {
+    const c = existing || {};
+    const html = `
+        <h2>${existing ? '化合物を編集' : '化合物を追加'}</h2>
+        <form class="row">
+          <label>化合物名 <input type="text" name="name" required value="${safe(c.name || '')}"></label>
+          <label>タグ (カンマ/スペース区切り。例: 神経伝達物質, アミノ酸)
+            <input type="text" name="tags" value="${safe((c.tags || []).join(', '))}"></label>
+          <label>Polarity
+            <select name="polarity">
+              <option value="">—</option>
+              <option value="+" ${c.polarity === '+' ? 'selected' : ''}>+ (positive)</option>
+              <option value="-" ${c.polarity === '-' ? 'selected' : ''}>- (negative)</option>
+            </select></label>
+          <label>メモ <textarea name="note">${safe(c.note || '')}</textarea></label>
+          <p class="err" data-err></p>
+          <div class="actions">
+            <button type="button" class="btn" data-modal-cancel>Cancel</button>
+            <button type="submit" class="btn primary" data-modal-ok>${existing ? 'Save' : 'Create'}</button>
+          </div>
+        </form>`;
+    const p = openModal(html);
+    const card = openModal._card;
+    card._collect = () => {
+        const name = (card.querySelector('[name="name"]').value || '').trim();
+        if (!name) { card.querySelector('[data-err]').textContent = '化合物名は必須'; return null; }
+        return {
+            name,
+            tags: parseTags(card.querySelector('[name="tags"]').value),
+            polarity: card.querySelector('[name="polarity"]').value || null,
+            note: (card.querySelector('[name="note"]').value || '').trim() || null,
+        };
+    };
+    return p;
+}
+
+async function openTransitionModal(existing) {
+    const t = existing || {};
+    const numVal = (v) => (v == null ? '' : v);
+    const html = `
+        <h2>${existing ? 'トランジションを編集' : 'トランジションを追加'}</h2>
+        <form class="row">
+          <div class="inline">
+            <label>Precursor <input type="number" step="any" name="precursor" value="${numVal(t.precursor)}"></label>
+            <label>Fragment <input type="number" step="any" name="product" value="${numVal(t.product)}"></label>
+          </div>
+          <div class="inline">
+            <label>CE <input type="number" step="any" name="ce" value="${numVal(t.ce)}"></label>
+            <label>CV <input type="number" step="any" name="cv" value="${numVal(t.cv)}"></label>
+          </div>
+          <div class="inline">
+            <label>Role
+              <select name="role">
+                <option value="">—</option>
+                <option value="定量" ${t.role === '定量' ? 'selected' : ''}>定量</option>
+                <option value="確認" ${t.role === '確認' ? 'selected' : ''}>確認</option>
+              </select></label>
+            <label style="flex:0 0 auto;align-self:end;white-space:nowrap;">
+              <input type="checkbox" name="is_recommended" ${t.is_recommended ? 'checked' : ''} style="width:auto;"> 推奨 ★</label>
+          </div>
+          <label>強度メモ (例: 強いが非特異 / 特異的だが弱い)
+            <input type="text" name="intensity_note" value="${safe(t.intensity_note || '')}"></label>
+          <label>メモ <textarea name="note">${safe(t.note || '')}</textarea></label>
+          <p class="err" data-err></p>
+          <div class="actions">
+            <button type="button" class="btn" data-modal-cancel>Cancel</button>
+            <button type="submit" class="btn primary" data-modal-ok>${existing ? 'Save' : 'Add'}</button>
+          </div>
+        </form>`;
+    const p = openModal(html);
+    const card = openModal._card;
+    const num = (name) => { const v = card.querySelector('[name="' + name + '"]').value; return v === '' ? null : Number(v); };
+    card._collect = () => ({
+        precursor: num('precursor'), product: num('product'), ce: num('ce'), cv: num('cv'),
+        role: card.querySelector('[name="role"]').value || null,
+        is_recommended: card.querySelector('[name="is_recommended"]').checked,
+        intensity_note: (card.querySelector('[name="intensity_note"]').value || '').trim() || null,
+        note: (card.querySelector('[name="note"]').value || '').trim() || null,
+    });
+    return p;
+}
+
+async function openUsageModal() {
+    const html = `
+        <h2>使用履歴を追加</h2>
+        <form class="row">
+          <label>プロジェクト名 <input type="text" name="project_name"></label>
+          <label>測定サンプル (脳/肝臓/腎臓/胎児 等) <input type="text" name="sample_name"></label>
+          <label>プロジェクト slug (任意。入力すると遡りリンクが有効になります)
+            <input type="text" name="project_slug"></label>
+          <p class="err" data-err></p>
+          <div class="actions">
+            <button type="button" class="btn" data-modal-cancel>Cancel</button>
+            <button type="submit" class="btn primary" data-modal-ok>Add</button>
+          </div>
+        </form>`;
+    const p = openModal(html);
+    const card = openModal._card;
+    card._collect = () => ({
+        project_name: (card.querySelector('[name="project_name"]').value || '').trim() || null,
+        sample_name: (card.querySelector('[name="sample_name"]').value || '').trim() || null,
+        project_slug: (card.querySelector('[name="project_slug"]').value || '').trim() || null,
+    });
+    return p;
+}
+
+// ===========================================================================
+// Actions
+// ===========================================================================
+function reportError(e, fallback) {
+    const msg = String((e && (e.message || e.details)) || '');
+    if (/unauthorized|28000/i.test(msg)) alert('Master password が違います (再読込で再認証)');
+    else alert((fallback || '失敗') + ': ' + msg);
+    console.warn(e);
+}
+
+async function addCompound() {
+    const data = await openCompoundModal(null);
+    if (!data) return;
+    try { await SupabaseClient.upsertCompound(_readCachedMasterPw(), data.name, data.tags, data.polarity, data.note); await loadLibrary(); }
+    catch (e) { reportError(e, '化合物の保存'); }
+}
+async function editCompound(id) {
+    const c = findCompound(id); if (!c) return;
+    const data = await openCompoundModal(c);
+    if (!data) return;
+    try { await SupabaseClient.updateCompound(_readCachedMasterPw(), id, data.name, data.tags, data.polarity, data.note); await loadLibrary(); }
+    catch (e) { reportError(e, '化合物の更新'); }
+}
+async function delCompound(id) {
+    const c = findCompound(id); if (!c) return;
+    if (!confirm('"' + c.name + '" とそのトランジション・使用履歴をすべて削除します。よろしいですか?')) return;
+    try { await SupabaseClient.deleteCompound(_readCachedMasterPw(), id); await loadLibrary(); }
+    catch (e) { reportError(e, '化合物の削除'); }
+}
+async function addTransition(compoundId) {
+    const data = await openTransitionModal(null);
+    if (!data) return;
+    data.compound_id = compoundId;
+    try { await SupabaseClient.upsertTransition(_readCachedMasterPw(), data); await loadLibrary(); }
+    catch (e) { reportError(e, 'トランジションの追加'); }
+}
+async function editTransition(tid) {
+    const found = findTransition(tid); if (!found) return;
+    const data = await openTransitionModal(found.transition);
+    if (!data) return;
+    try { await SupabaseClient.updateTransition(_readCachedMasterPw(), tid, data); await loadLibrary(); }
+    catch (e) { reportError(e, 'トランジションの更新'); }
+}
+async function delTransition(tid) {
+    if (!confirm('このトランジションと使用履歴を削除します。よろしいですか?')) return;
+    try { await SupabaseClient.deleteTransition(_readCachedMasterPw(), tid); await loadLibrary(); }
+    catch (e) { reportError(e, 'トランジションの削除'); }
+}
+async function addUsage(tid) {
+    const data = await openUsageModal();
+    if (!data) return;
+    data.transition_id = tid; data.source = 'manual';
+    try { await SupabaseClient.recordUsage(_readCachedMasterPw(), data); await loadLibrary(); }
+    catch (e) { reportError(e, '使用履歴の追加'); }
+}
+function openUsageLink(slug) {
+    if (!slug) return;
+    location.href = 'viewer/index.html#share=' + encodeURIComponent(slug);
+}
+
+function bindLibraryEvents() {
+    const host = document.getElementById('lib');
+    host.addEventListener('click', (ev) => {
+        const el = ev.target && ev.target.closest && ev.target.closest('[data-action]');
+        if (!el) return;
+        const action = el.getAttribute('data-action');
+        // Buttons inside <summary> would toggle the <details>; prevent that.
+        if (el.closest('summary')) { ev.preventDefault(); }
+        ev.stopPropagation();
+        const id = el.getAttribute('data-id');
+        const tid = el.getAttribute('data-tid');
+        switch (action) {
+            case 'add-compound': addCompound(); break;
+            case 'edit-compound': editCompound(id); break;
+            case 'del-compound': delCompound(id); break;
+            case 'add-transition': addTransition(id); break;
+            case 'edit-transition': editTransition(tid); break;
+            case 'del-transition': delTransition(tid); break;
+            case 'add-usage': addUsage(tid); break;
+            case 'open-usage': openUsageLink(el.getAttribute('data-slug')); break;
+        }
+    });
+}
+
+async function init() {
+    await requireMasterUnlock();
+    document.getElementById('btn-back').addEventListener('click', () => { location.href = 'index.html'; });
+    document.getElementById('btn-add-compound').addEventListener('click', () => addCompound());
+    document.getElementById('btn-reload').addEventListener('click', () => loadLibrary());
+    const search = document.getElementById('search');
+    search.addEventListener('input', () => { searchText = search.value; renderLibrary(); });
+    bindLibraryEvents();
+    await loadLibrary();
+}
+
+document.addEventListener('DOMContentLoaded', () => { init().catch(e => { console.error(e); alert('init failed: ' + (e.message || e)); }); });
+</script>
+<!-- Build tag: bumped on every push so a maintainer / recipient can spot a
+     stale cached copy. -->
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-26-mrm-r1</div>
+</body>
+</html>

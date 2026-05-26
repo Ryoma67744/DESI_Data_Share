@@ -288,6 +288,13 @@ body.share-mode:not(.share-admin) #method-table thead th:nth-child(5),
 body.share-mode:not(.share-admin) #method-table thead th:nth-child(6),
 body.share-mode:not(.share-admin) #method-rows tr > td:nth-child(5),
 body.share-mode:not(.share-admin) #method-rows tr > td:nth-child(6) { display:none !important; }
+/* MRM-library register UI is master-only: hide the trailing select column and
+   the bulk-register button for ANY share recipient (incl. share-admin). The
+   select column is appended last, so the CE/CV nth-child(5)/(6) rules above
+   are unaffected. */
+body.share-mode #method-select-col,
+body.share-mode .method-select-cell,
+body.share-mode #method-actions { display:none !important; }
 /* In share mode, hide the per-file "delete" action regardless of admin
    role — share recipients shouldn't ever delete file groups. */
 body.share-mode .thumb-file-group .file-actions [data-action="delete-file"],
@@ -553,6 +560,9 @@ body.share-mode #btn-share-preview { display:inline-flex; }
             <!-- Method (MRM) - moved here from ANALYSIS panel -->
             <details id="method-panel" class="bg-white rounded shadow-sm border border-gray-200 shrink-0 flex flex-col overflow-hidden" style="height:240px; min-height:80px;" open>
                 <summary class="text-[11px] font-semibold text-gray-600 px-2 py-1 cursor-pointer select-none bg-gray-50 rounded-t shrink-0">Method (MRM)</summary>
+                <div id="method-actions" class="px-2 py-1 border-b border-gray-100 shrink-0 bg-white">
+                    <button type="button" id="btn-mrm-register" style="font-size:11px;padding:3px 8px;border:1px solid #d1d5db;border-radius:3px;background:#fff;color:#475569;cursor:pointer;" title="チェックした行を MRM管理ライブラリへ登録">選択を管理へ登録</button>
+                </div>
                 <div id="method-body" class="overflow-auto flex-1 min-h-0">
                     <table id="method-table" class="w-full text-[11px] border-collapse">
                         <thead class="bg-gray-50" style="position:sticky;top:0;z-index:1;">
@@ -565,10 +575,11 @@ body.share-mode #btn-share-preview { display:inline-flex; }
                                 <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500" data-sort-key="cv"        title="Click to sort High↔Low (3rd click clears)">CV</th>
                                 <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500" data-sort-key="mean"      title="Click to sort High↔Low (3rd click clears)">Mean</th>
                                 <th class="text-right px-2 py-1 border-b border-gray-200 font-medium text-gray-500" data-sort-key="max"       title="Click to sort High↔Low (3rd click clears)">Max</th>
+                                <th id="method-select-col" class="px-1 py-1 border-b border-gray-200 font-medium text-gray-500 text-center" title="MRM管理へ登録する行を選択"><input type="checkbox" id="method-select-all" title="表示中の全行を選択"></th>
                             </tr>
                         </thead>
                         <tbody id="method-rows">
-                            <tr><td colspan="8" class="px-2 py-2 text-center text-gray-400">No compound</td></tr>
+                            <tr><td colspan="9" class="px-2 py-2 text-center text-gray-400">No compound</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -4411,9 +4422,9 @@ function renderMethodTable() {
     const tbody = document.getElementById('method-rows');
     if (!tbody) return;
     const project = App.project;
-    if (!project) { tbody.innerHTML = '<tr><td colspan="7" class="px-2 py-2 text-center text-gray-400">No project</td></tr>'; return; }
+    if (!project) { tbody.innerHTML = '<tr><td colspan="9" class="px-2 py-2 text-center text-gray-400">No project</td></tr>'; return; }
     const panel = App.activeSectionId ? App.panels.get(App.activeSectionId) : null;
-    if (!panel) { tbody.innerHTML = '<tr><td colspan="7" class="px-2 py-2 text-center text-gray-400">No active section</td></tr>'; return; }
+    if (!panel) { tbody.innerHTML = '<tr><td colspan="9" class="px-2 py-2 text-center text-gray-400">No active section</td></tr>'; return; }
 
     const layerKeys = sortMethodKeys(
         Object.keys(panel.section.msiSeries || {}).filter(k => /^MSI_/i.test(k)),
@@ -4425,7 +4436,7 @@ function renderMethodTable() {
     _updateMethodHeaderArrows('#method-table thead', App.methodSort);
 
     if (!layerKeys.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="px-2 py-2 text-center text-gray-400">No MSI layer in this section</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="px-2 py-2 text-center text-gray-400">No MSI layer in this section</td></tr>';
         return;
     }
 
@@ -4466,7 +4477,10 @@ function renderMethodTable() {
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(ce) + '</td>' +
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(cv) + '</td>' +
             '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(rawMean) + '</td>' +
-            '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(rawMax) + '</td>';
+            '<td class="px-2 py-1 border-b border-gray-100 text-right text-gray-700">' + safe(rawMax) + '</td>' +
+            '<td class="px-1 py-1 border-b border-gray-100 text-center method-select-cell" data-cell="select">' +
+                '<input type="checkbox" class="method-select" data-layer-key="' + safe(layerKey) + '" title="MRM管理へ登録">' +
+            '</td>';
         tr.innerHTML = cellHtml;
 
         const swatch = tr.querySelector('.marker-swatch');
@@ -4489,8 +4503,13 @@ function renderMethodTable() {
         });
         colorInput.addEventListener('click', (ev) => ev.stopPropagation());
 
+        // Selection checkbox (MRM-library register) must not trigger the row's
+        // compound-switch / layer-click behaviour.
+        const selectCb = tr.querySelector('.method-select');
+        if (selectCb) selectCb.addEventListener('click', (ev) => ev.stopPropagation());
+
         tr.addEventListener('click', (ev) => {
-            if (ev.target && (ev.target.classList.contains('marker-swatch') || ev.target.classList.contains('marker-input'))) return;
+            if (ev.target && (ev.target.classList.contains('marker-swatch') || ev.target.classList.contains('marker-input') || ev.target.classList.contains('method-select'))) return;
             // In Compound mode, the Method table is the compound switcher: a
             // click promotes that row to the focus compound and every section
             // re-renders with that single MSI layer.
@@ -4544,6 +4563,108 @@ function applyMarkerColor(panel, layerKey, color) {
     panel.rebuildLayerBar();
     renderMethodTable();
     App.queueSave();
+}
+
+// --- MRM library: register selected Method rows ----------------------------
+// Master-only. Pushes each checked Method-table row into the shared MRM
+// library (supabase/mrm_library.sql) as compound + transition + usage, with
+// the current project name / sample / slug attached for traceback.
+function _parseMrmTags(s) {
+    const out = [];
+    for (const raw of String(s || '').split(/[,、\s]+/)) {
+        const t = raw.trim();
+        if (t && out.indexOf(t) === -1) out.push(t);
+    }
+    return out;
+}
+
+function openMrmRegisterOptionsModal(n) {
+    const html = ''
+        + '<h2>MRM管理へ登録 (' + n + ' 件)</h2>'
+        + '<form>'
+        + '<p style="font-size:11px;color:#475569;margin-bottom:8px;">選択した ' + n + ' 行を MRM管理ライブラリへ登録します。タグ・役割は任意（全行へ適用）。同名化合物が無ければ自動作成します。</p>'
+        + '<label style="display:block;font-size:11px;color:#475569;">タグ (カンマ/スペース区切り)'
+        +   '<input type="text" name="tags" placeholder="神経伝達物質, アミノ酸" style="width:100%;padding:5px 7px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;margin-top:2px;">'
+        + '</label>'
+        + '<label style="display:block;font-size:11px;color:#475569;margin-top:8px;">Role'
+        +   '<select name="role" style="width:100%;padding:5px 7px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;margin-top:2px;background:#fff;"><option value="">—</option><option value="定量">定量</option><option value="確認">確認</option></select>'
+        + '</label>'
+        + '<div class="modal-actions" style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px;">'
+        +   '<button type="button" class="btn" data-modal-cancel>Cancel</button>'
+        +   '<button type="submit" class="btn primary" data-modal-ok>登録</button>'
+        + '</div>'
+        + '</form>';
+    const p = openModal(html);
+    const card = openModal._card;
+    card._collect = () => ({
+        tags: _parseMrmTags(card.querySelector('[name="tags"]').value),
+        role: card.querySelector('[name="role"]').value || null,
+    });
+    return p;
+}
+
+async function registerSelectedToMrmLibrary() {
+    if (document.body.classList.contains('share-mode')) return;  // master only
+    const project = App.project;
+    if (!project) { showToast('プロジェクトがありません'); return; }
+    const panel = App.activeSectionId ? App.panels.get(App.activeSectionId) : null;
+    if (!panel) { showToast('アクティブな切片がありません'); return; }
+    const checked = Array.from(document.querySelectorAll('#method-rows .method-select:checked'));
+    if (!checked.length) { showToast('登録する行をチェックしてください'); return; }
+
+    let masterPw = _readCachedMasterPw();
+    if (!masterPw) {
+        masterPw = (prompt('Master password を入力してください', 'MSIadomine') || '').trim();
+        if (!masterPw) return;
+    }
+
+    const opts = await openMrmRegisterOptionsModal(checked.length);
+    if (opts == null) return;  // cancelled
+
+    const projName = project.displayName || '';
+    const sample = ensureMemoShape(project.memo).sample || '';
+    const slug = (project.shareInfo && project.shareInfo.slug) || null;
+    const num = (v) => (v == null || v === '') ? null : Number(v);
+
+    let ok = 0, fail = 0;
+    for (const cb of checked) {
+        const layerKey = cb.getAttribute('data-layer-key');
+        const ent = (panel.section.msiSeries || {})[layerKey] || {};
+        const meta = ent.compoundMeta || findCompoundMeta(project, layerKey) || {};
+        const name = meta.base || formatDisplayName(layerKey);
+        let polarity = meta.polarity || null;
+        if (!polarity) {
+            const s = String(meta.base || layerKey);
+            if (/_neg\b/i.test(s)) polarity = '-';
+            else if (/_pos\b/i.test(s)) polarity = '+';
+        }
+        try {
+            await SupabaseClient.registerFromResult({
+                _master_pw: masterPw,
+                _name: name,
+                _tags: opts.tags,
+                _polarity: polarity,
+                _precursor: num(meta.precursor),
+                _product: num(meta.product),
+                _ce: num(meta.ce),
+                _cv: num(meta.cv),
+                _role: opts.role || null,
+                _project_slug: slug,
+                _project_name: projName,
+                _sample_name: sample,
+            });
+            ok++;
+        } catch (e) {
+            console.warn('register_from_result failed for', layerKey, e);
+            fail++;
+            const msg = String((e && (e.message || e.details)) || '');
+            if (/unauthorized|28000/i.test(msg)) { showToast('Master password が違います', 4000); return; }
+        }
+    }
+    _saveCachedMasterPw(masterPw);
+    document.querySelectorAll('#method-rows .method-select').forEach(c => { c.checked = false; });
+    const sa = document.getElementById('method-select-all'); if (sa) sa.checked = false;
+    showToast('MRM管理へ登録: ' + ok + ' 件' + (fail ? ' / 失敗 ' + fail + ' 件' : ''), 3500);
 }
 
 function drawSectionMultiBar(canvas, sections, channels, stats, roi) {
@@ -9486,6 +9607,11 @@ const SupabaseClient = (() => {
         requestPublishSession(masterPw, slug) {
             return rpc('request_publish_session', { _master_pw: masterPw, _slug: slug });
         },
+        // MRM library (master-pw gated) ------------------------
+        listMrmLibrary(masterPw) { return rpc('list_mrm_library', { _master_pw: masterPw }); },
+        // One transactional upsert per selected Method-table row: compound +
+        // transition + usage. See supabase/mrm_library.sql:register_from_result.
+        registerFromResult(args) { return rpc('register_from_result', args); },
         // Storage ----------------------------------------------
         // Phase 1: uploads must carry an x-publish-token header obtained
         // from request_publish_session. supabase-js's storage.upload()
@@ -9587,6 +9713,25 @@ const App = {
             this.methodSort = _advanceMethodSort(this.methodSort, k);
             try { renderMethodTable(); } catch (e) { console.warn('renderMethodTable after sort failed', e); }
         });
+    },
+
+    // Wire the Method-table selection checkbox header + the "選択を管理へ登録"
+    // bulk button (master-only; the UI is hidden via CSS in share mode). Bound
+    // once; the per-row checkboxes are re-created by renderMethodTable and are
+    // queried live at click time.
+    _bindMrmRegister() {
+        const selectAll = document.getElementById('method-select-all');
+        if (selectAll && !selectAll._mrmBound) {
+            selectAll._mrmBound = true;
+            selectAll.addEventListener('change', () => {
+                document.querySelectorAll('#method-rows .method-select').forEach(cb => { cb.checked = selectAll.checked; });
+            });
+        }
+        const btn = document.getElementById('btn-mrm-register');
+        if (btn && !btn._mrmBound) {
+            btn._mrmBound = true;
+            btn.addEventListener('click', () => { registerSelectedToMrmLibrary().catch(e => console.error(e)); });
+        }
     },
 
     setupGlobalSectionSplitter() {
@@ -9891,6 +10036,7 @@ const App = {
         }
         this.refreshViewModeUI();
         this._bindMethodHeaderSort();
+        this._bindMrmRegister();
         const persistedTh = parseInt(localStorage.getItem('desi:layout:sectionThumbH') || '', 10);
         if (Number.isFinite(persistedTh) && persistedTh > 0) this.thumbHeight = persistedTh;
         document.documentElement.style.setProperty('--thumb-h', this.thumbHeight + 'px');
@@ -10504,7 +10650,7 @@ const App = {
         document.getElementById('graph-container').innerHTML = '<p class="text-gray-400 text-xs">No project</p>';
         ['graph-select-1', 'graph-select-2', 'graph-select-3'].forEach(id => document.getElementById(id).innerHTML = '');
         const tbody = document.getElementById('method-rows');
-        if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="px-2 py-2 text-center text-gray-400">No project</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="px-2 py-2 text-center text-gray-400">No project</td></tr>';
         renderMemoForm();
         this.refreshAnalysisScope();
         this.refreshShareInfoButton();
@@ -11480,6 +11626,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-22-r33</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-26-r34</div>
 </body>
 </html>
