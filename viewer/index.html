@@ -295,6 +295,16 @@ body.share-mode:not(.share-admin) #method-rows tr > td:nth-child(6) { display:no
 body.share-mode #method-select-col,
 body.share-mode .method-select-cell,
 body.share-mode #method-actions { display:none !important; }
+/* Molecule-overlay chips (master Method panel). */
+#overlay-list { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+.ov-chip { display:inline-flex; align-items:center; gap:3px; padding:1px 4px 1px 5px; border:1px solid #cbd5e1; border-radius:9999px; background:#fff; font-size:10px; cursor:pointer; color:#334155; }
+.ov-chip.on { background:#0f172a; border-color:#0f172a; color:#fff; }
+.ov-chip .ov-dot { width:9px; height:9px; border-radius:50%; display:inline-block; border:1px solid rgba(0,0,0,0.25); }
+.ov-chip .ov-name { margin:0 2px; }
+.ov-chip .ov-edit, .ov-chip .ov-del { border:none; background:transparent; cursor:pointer; font-size:11px; line-height:1; padding:0 1px; color:inherit; opacity:0.7; }
+.ov-chip .ov-del { color:#dc2626; }
+.ov-chip.on .ov-del { color:#fca5a5; }
+.ov-reset { border:1px dashed #cbd5e1; background:#fff; border-radius:9999px; font-size:10px; padding:1px 7px; cursor:pointer; color:#475569; }
 /* In share mode, hide the per-file "delete" action regardless of admin
    role — share recipients shouldn't ever delete file groups. */
 body.share-mode .thumb-file-group .file-actions [data-action="delete-file"],
@@ -562,6 +572,8 @@ body.share-mode #btn-share-preview { display:inline-flex; }
                 <summary class="text-[11px] font-semibold text-gray-600 px-2 py-1 cursor-pointer select-none bg-gray-50 rounded-t shrink-0">Method (MRM)</summary>
                 <div id="method-actions" class="px-2 py-1 border-b border-gray-100 shrink-0 bg-white">
                     <button type="button" id="btn-mrm-register" style="font-size:11px;padding:3px 8px;border:1px solid #d1d5db;border-radius:3px;background:#fff;color:#475569;cursor:pointer;" title="チェックした行を MRM管理ライブラリへ登録">選択を管理へ登録</button>
+                    <button type="button" id="btn-add-overlay" style="font-size:11px;padding:3px 8px;border:1px solid #d1d5db;border-radius:3px;background:#fff;color:#475569;cursor:pointer;" title="2分子以上のカラー重ね合わせを登録">＋重ね合わせ</button>
+                    <div id="overlay-list"></div>
                 </div>
                 <div id="method-body" class="overflow-auto flex-1 min-h-0">
                     <table id="method-table" class="w-full text-[11px] border-collapse">
@@ -1630,6 +1642,22 @@ function getColormapBackground() {
     return COLORMAP_BACKGROUNDS[_activeColormapName] || [0, 0, 0];
 }
 
+// Single-hue gradient LUT (black -> color) for the 2+ molecule overlay mode.
+// Cached per color. buildLut stops are [t, r, g, b].
+function _hexToRgb(hex) {
+    const m = /^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/.exec(String(hex || '').trim());
+    return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 255, 255];
+}
+const _monoLutCache = {};
+function monoLut(hex) {
+    const key = String(hex || '#ffffff').toLowerCase();
+    if (_monoLutCache[key]) return _monoLutCache[key];
+    const rgb = _hexToRgb(key);
+    const lut = buildLut([[0, 0, 0, 0], [1, rgb[0], rgb[1], rgb[2]]]);
+    _monoLutCache[key] = lut;
+    return lut;
+}
+
 function rasterRowsToPngDataUrl(rows, range) {
     const xs = [...new Set(rows.map(r => r.x))].sort((a, b) => a - b);
     const ys = [...new Set(rows.map(r => r.y))].sort((a, b) => a - b);
@@ -2438,6 +2466,14 @@ class SectionPanel {
         // site) is the only path that turns interpolation back on.
         ctx.imageSmoothingEnabled = false;
 
+        // Molecule-overlay mode (App.setActiveOverlay): draw the registered
+        // overlay's member MSI layers as additive single-color gradients.
+        const overlay = (typeof App !== 'undefined' && App && App.activeOverlay) || null;
+        const overlayColor = {};
+        if (overlay) for (const l of (overlay.layers || [])) { if (l && l.key) overlayColor[l.key] = l.color || '#ffffff'; }
+        const overlayBlack = !!(overlay && overlay.bg !== 'he');
+        if (overlayBlack) { ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, this.dom.cdisp.width, this.dom.cdisp.height); }
+
         // Section-level flip (master-only setting). Wrap the entire layer
         // loop in a single mirror transform so MSI + HE/IF + others all
         // flip uniformly. Outer transforms compose as transform = outer ∘
@@ -2481,9 +2517,16 @@ class SectionPanel {
         // bottom→top as TIC → IHC → MSI. heLikeKeys regex picks up both
         // HE_STAIN_TIC and IF_STAIN; explicit sort keeps the order stable.
         heLikeKeys.sort((a, b) => (a === 'HE_STAIN_TIC' ? -1 : 0) - (b === 'HE_STAIN_TIC' ? -1 : 0));
-        const layersToDraw = [...heLikeKeys, ...others, ...msiKeys];
+        let layersToDraw = [...heLikeKeys, ...others, ...msiKeys];
         if (compoundFocus && this.imageSources[compoundFocus] && !layersToDraw.includes(compoundFocus)) {
             layersToDraw.push(compoundFocus);
+        }
+        if (overlay) {
+            // Overlay overrides the visible-layer set: draw only the overlay's
+            // member MSI layers (plus the HE/IF backdrop when bg === 'he').
+            const members = (overlay.layers || []).map(l => l && l.key)
+                .filter(k => k && this.imageSources[k] && this.imageSettings[k]);
+            layersToDraw = overlayBlack ? members : [...heLikeKeys, ...members];
         }
         for (const key of layersToDraw) {
             const img = this.imageSources[key];
@@ -2510,8 +2553,8 @@ class SectionPanel {
                 const data = tctx.getImageData(0, 0, tc.width, tc.height);
                 const d = data.data;
                 const range = (settings.vmax - settings.vmin) || 1;
-                const lut = getActiveColormap();
-                const bg = getColormapBackground();
+                const lut = overlay ? monoLut(overlayColor[key] || '#ffffff') : getActiveColormap();
+                const bg = overlay ? [0, 0, 0] : getColormapBackground();
                 for (let i = 0; i < d.length; i += 4) {
                     const r = d[i], g = d[i+1], b = d[i+2], a = d[i+3];
                     const lum = 0.299*r + 0.587*g + 0.114*b;
@@ -2563,10 +2606,10 @@ class SectionPanel {
             }
 
             ctx.globalAlpha = (settings.applyOpacity === false) ? 1.0 : settings.opacity;
-            // Always use source-over so MSI Opacity behaves intuitively (100 %
-            // covers HE, 0 % reveals it). Additive 'lighter' would let HE bleed
-            // through and distort signal/intensity reading on light histology.
-            ctx.globalCompositeOperation = 'source-over';
+            // Normally source-over (MSI Opacity covers HE intuitively). In the
+            // molecule-overlay mode each MSI member composites additively so
+            // co-localisation reads as colour mixing (e.g. red + green → yellow).
+            ctx.globalCompositeOperation = (overlay && isMsiLayer) ? 'lighter' : 'source-over';
 
             const ref = this.getMsiRefSize();
 
@@ -4427,6 +4470,7 @@ function findCompoundMeta(project, layerKey) {
 }
 
 function renderMethodTable() {
+    try { renderOverlayBar(); } catch (e) {}
     const tbody = document.getElementById('method-rows');
     if (!tbody) return;
     const project = App.project;
@@ -4673,6 +4717,155 @@ async function registerSelectedToMrmLibrary() {
     document.querySelectorAll('#method-rows .method-select').forEach(c => { c.checked = false; });
     const sa = document.getElementById('method-select-all'); if (sa) sa.checked = false;
     showToast('MRM管理へ登録: ' + ok + ' 件' + (fail ? ' / 失敗 ' + fail + ' 件' : ''), 3500);
+}
+
+// --- Molecule color-overlay (master) --------------------------------------
+// Recover the project-wide overlays array from any section.meta (they all
+// carry the same array; published via section.meta to survive the round-trip).
+function _overlaysFromSections(sections) {
+    const s = (sections || []).find(x => x && x.meta && Array.isArray(x.meta.overlays) && x.meta.overlays.length);
+    return s ? s.meta.overlays : [];
+}
+
+// Distinct MSI compound layers across the project, as [key, displayName].
+function _allMsiCompounds() {
+    const map = new Map();
+    for (const s of ((App.project && App.project.sections) || [])) {
+        for (const k of Object.keys(s.msiSeries || {})) {
+            if (!/^MSI_/i.test(k) || map.has(k)) continue;
+            const meta = findCompoundMeta(App.project, k);
+            map.set(k, (meta && (meta.base || meta.name)) || formatDisplayName(k));
+        }
+    }
+    return Array.from(map.entries());
+}
+
+// Render the registered-overlay chip list in the Method panel (master only).
+function renderOverlayBar() {
+    const host = document.getElementById('overlay-list');
+    if (!host) return;
+    const overlays = (App.project && App.project.overlays) || [];
+    const active = App.activeOverlay;
+    const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    if (!overlays.length) { host.innerHTML = ''; return; }
+    let html = overlays.map(ov => {
+        const dots = (ov.layers || []).map(l => '<span class="ov-dot" style="background:' + esc(l.color || '#fff') + '"></span>').join('');
+        const on = !!(active && active.id === ov.id);
+        return '<span class="ov-chip' + (on ? ' on' : '') + '" data-ov-id="' + esc(ov.id) + '" title="クリックで重ね合わせ表示">'
+            + dots + '<span class="ov-name">' + esc(ov.name || 'overlay') + '</span>'
+            + '<button type="button" class="ov-edit" data-ov-edit="' + esc(ov.id) + '" title="編集">✎</button>'
+            + '<button type="button" class="ov-del" data-ov-del="' + esc(ov.id) + '" title="削除">×</button>'
+            + '</span>';
+    }).join('');
+    if (active) html += '<button type="button" class="ov-reset" data-ov-reset title="単一化合物表示に戻す">単一表示へ</button>';
+    host.innerHTML = html;
+}
+
+function openOverlayModal(existing) {
+    const ov = existing || { name: '', layers: [], bg: 'black' };
+    const compounds = _allMsiCompounds();
+    if (compounds.length < 2) { showToast('重ね合わせには2つ以上のMSI化合物が必要です'); return; }
+    const palette = ['#ff3030', '#30ff30', '#3090ff', '#ffcf00', '#ff30ff', '#30ffff'];
+    const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const optionsHtml = (sel) => compounds.map(([k, n]) => '<option value="' + esc(k) + '"' + (k === sel ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
+    const rowHtml = (layer, idx) => {
+        const k = layer ? layer.key : ((compounds[idx] && compounds[idx][0]) || compounds[0][0]);
+        const c = layer ? (layer.color || palette[idx % palette.length]) : palette[idx % palette.length];
+        return '<div class="ov-row" style="display:flex;gap:6px;align-items:center;margin-top:4px;">'
+            + '<select class="ov-row-key" style="flex:1;min-width:0;padding:4px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;">' + optionsHtml(k) + '</select>'
+            + '<input type="color" class="ov-row-color" value="' + esc(c) + '" style="width:36px;height:28px;padding:0;border:1px solid #cbd5e1;border-radius:4px;">'
+            + '<button type="button" class="btn ov-row-del" title="行を削除" style="padding:2px 8px;">×</button>'
+            + '</div>';
+    };
+    const initRows = (ov.layers && ov.layers.length) ? ov.layers : [null, null];
+    const html = ''
+        + '<h2>重ね合わせを' + (existing ? '編集' : '登録') + '</h2>'
+        + '<form>'
+        + '<label style="display:block;font-size:11px;color:#475569;">名前<input type="text" name="ovname" value="' + esc(ov.name || '') + '" style="width:100%;padding:5px 7px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;margin-top:2px;"></label>'
+        + '<div style="font-size:11px;color:#475569;margin-top:8px;">分子と色（加算合成・2つ以上）</div>'
+        + '<div data-ov-rows>' + initRows.map((l, i) => rowHtml(l, i)).join('') + '</div>'
+        + '<button type="button" class="btn" data-ov-addrow style="margin-top:6px;padding:2px 8px;">＋分子を追加</button>'
+        + '<label style="display:block;font-size:11px;color:#475569;margin-top:8px;">背景'
+        +   '<select name="ovbg" style="width:100%;padding:5px 7px;border:1px solid #cbd5e1;border-radius:4px;font-size:13px;margin-top:2px;background:#fff;"><option value="black"' + (ov.bg !== 'he' ? ' selected' : '') + '>黒（MSIのみ加算）</option><option value="he"' + (ov.bg === 'he' ? ' selected' : '') + '>HE/IF背景の上</option></select>'
+        + '</label>'
+        + '<p data-err style="color:#b91c1c;font-size:11px;min-height:14px;"></p>'
+        + '<div class="modal-actions" style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px;">'
+        +   '<button type="button" class="btn" data-modal-cancel>Cancel</button>'
+        +   '<button type="submit" class="btn primary" data-modal-ok>保存</button>'
+        + '</div></form>';
+    const p = openModal(html);
+    const card = openModal._card;
+    const rowsHost = card.querySelector('[data-ov-rows]');
+    card.querySelector('[data-ov-addrow]').addEventListener('click', () => {
+        const idx = rowsHost.querySelectorAll('.ov-row').length;
+        const tmp = document.createElement('div');
+        tmp.innerHTML = rowHtml(null, idx);
+        rowsHost.appendChild(tmp.firstChild);
+    });
+    rowsHost.addEventListener('click', (ev) => {
+        const del = ev.target.closest && ev.target.closest('.ov-row-del');
+        if (!del) return;
+        if (rowsHost.querySelectorAll('.ov-row').length <= 1) return;
+        del.closest('.ov-row').remove();
+    });
+    card._collect = () => {
+        const name = (card.querySelector('[name="ovname"]').value || '').trim();
+        const rows = Array.from(rowsHost.querySelectorAll('.ov-row')).map(r => ({
+            key: r.querySelector('.ov-row-key').value,
+            color: r.querySelector('.ov-row-color').value,
+        })).filter(l => l.key);
+        if (rows.length < 2) { card.querySelector('[data-err]').textContent = '2つ以上の分子を選んでください'; return null; }
+        return { name: name || (rows.length + '色重ね合わせ'), layers: rows, bg: card.querySelector('[name="ovbg"]').value || 'black' };
+    };
+    p.then((res) => {
+        if (!res) return;
+        if (!App.project) return;
+        App.project.overlays = App.project.overlays || [];
+        let target;
+        if (existing && existing.id) {
+            existing.name = res.name; existing.layers = res.layers; existing.bg = res.bg;
+            target = existing;
+        } else {
+            res.id = 'ov_' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
+            App.project.overlays.push(res);
+            target = res;
+        }
+        App.queueSave();
+        App.setActiveOverlay(target);   // also re-renders + refreshes the bar via renderMethodTable
+    });
+}
+
+function bindOverlayUi() {
+    const addBtn = document.getElementById('btn-add-overlay');
+    if (addBtn && !addBtn._ovBound) { addBtn._ovBound = true; addBtn.addEventListener('click', () => openOverlayModal(null)); }
+    const list = document.getElementById('overlay-list');
+    if (list && !list._ovBound) {
+        list._ovBound = true;
+        list.addEventListener('click', (ev) => {
+            const overlays = (App.project && App.project.overlays) || [];
+            const byId = (id) => overlays.find(o => o.id === id) || null;
+            const editEl = ev.target.closest && ev.target.closest('[data-ov-edit]');
+            if (editEl) { const o = byId(editEl.getAttribute('data-ov-edit')); if (o) openOverlayModal(o); return; }
+            const delEl = ev.target.closest && ev.target.closest('[data-ov-del]');
+            if (delEl) {
+                const id = delEl.getAttribute('data-ov-del'); const o = byId(id);
+                if (o && confirm('重ね合わせ "' + (o.name || '') + '" を削除しますか?')) {
+                    App.project.overlays = overlays.filter(x => x.id !== id);
+                    if (App.activeOverlay && App.activeOverlay.id === id) App.clearActiveOverlay();
+                    App.queueSave(); renderOverlayBar();
+                }
+                return;
+            }
+            if (ev.target.closest && ev.target.closest('[data-ov-reset]')) { App.clearActiveOverlay(); return; }
+            const chip = ev.target.closest && ev.target.closest('[data-ov-id]');
+            if (chip) {
+                const o = byId(chip.getAttribute('data-ov-id'));
+                if (!o) return;
+                if (App.activeOverlay && App.activeOverlay.id === o.id) App.clearActiveOverlay();
+                else App.setActiveOverlay(o);
+            }
+        });
+    }
 }
 
 function drawSectionMultiBar(canvas, sections, channels, stats, roi) {
@@ -7077,7 +7270,10 @@ async function _publishCore(project, meta, masterPw, opts) {
             id: sec.id,
             ordinal: sec.ordinal || 0,
             displayName: sec.displayName || ('Section ' + (sec.ordinal || '')),
-            meta: sec.meta || {},
+            // Project-wide molecule overlays ride along in section.meta because
+            // upsert_project_doc only round-trips project.meta.memo, whereas
+            // section.meta is persisted verbatim.
+            meta: Object.assign({}, sec.meta || {}, { overlays: project.overlays || [] }),
             storagePaths: storage,
         });
     }
@@ -8258,7 +8454,9 @@ const SharePreview = {
         if (!this.isOpen()) return;
         const focusKey = App.focusCompoundKey;
         const titleEl = this.overlay.querySelector('[data-preview-title]');
-        if (titleEl) titleEl.textContent = buildCompoundTitle(focusKey, project, this.role);
+        if (titleEl) titleEl.textContent = App.activeOverlay
+            ? ('重ね合わせ: ' + (App.activeOverlay.name || ''))
+            : buildCompoundTitle(focusKey, project, this.role);
         this._renderMethodHighlight(focusKey);
         this._renderImageGrid(project, focusKey);
         this._renderStatsTable(project, focusKey);
@@ -8474,13 +8672,31 @@ const SharePreview = {
                 : [compoundTd, precursorTd, productTd];
             return `<tr data-key="${safe(key)}">${tds.join('')}</tr>`;
         });
-        body.innerHTML = rows.join('');
+        // Registered molecule overlays appear after the compounds — but only
+        // when the master registered any (project.overlays non-empty), which
+        // satisfies "show in the shared preview only if master registered it".
+        const esc2 = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+        const ncol = colDefs.length;
+        const overlayRows = ((project.overlays) || []).map(ov => {
+            const dots = (ov.layers || []).map(l => `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${esc2(l.color || '#fff')};margin-right:2px;border:1px solid rgba(0,0,0,0.3);vertical-align:middle;"></span>`).join('');
+            return `<tr data-overlay-id="${esc2(ov.id)}" class="overlay-row"><td class="compound-cell" colspan="${ncol}">${dots}${esc2(ov.name || 'overlay')} <span style="color:#94a3b8;">(重ね合わせ)</span></td></tr>`;
+        }).join('');
+        body.innerHTML = rows.join('') + overlayRows;
 
         body.querySelectorAll('tr[data-key]').forEach(tr => {
             tr.addEventListener('click', () => {
                 const key = tr.getAttribute('data-key');
-                if (!key || key === App.focusCompoundKey) return;
-                App.setFocusCompoundKey(key);
+                if (!key) return;
+                if (!App.activeOverlay && key === App.focusCompoundKey) return;
+                App.setFocusCompoundKey(key);   // also clears any active overlay
+                this.refresh(App.project);
+            });
+        });
+        body.querySelectorAll('tr[data-overlay-id]').forEach(tr => {
+            tr.addEventListener('click', () => {
+                const ov = ((project.overlays) || []).find(o => o.id === tr.getAttribute('data-overlay-id'));
+                if (!ov) return;
+                App.setActiveOverlay(ov);
                 this.refresh(App.project);
             });
         });
@@ -8489,8 +8705,11 @@ const SharePreview = {
     _renderMethodHighlight(focusKey) {
         const body = this.overlay.querySelector('[data-method-body]');
         if (!body) return;
+        const ov = App.activeOverlay;
         body.querySelectorAll('tr').forEach(tr => {
-            tr.classList.toggle('active', tr.getAttribute('data-key') === focusKey);
+            const ovId = tr.getAttribute('data-overlay-id');
+            if (ovId) tr.classList.toggle('active', !!(ov && ov.id === ovId));
+            else tr.classList.toggle('active', !ov && tr.getAttribute('data-key') === focusKey);
         });
     },
 
@@ -8507,13 +8726,19 @@ const SharePreview = {
         });
         const cells = sections.map((sec, idx) => {
             const safeName = String(sec.displayName || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
-            const ent = (sec.msiSeries || {})[focusKey];
+            // Overlay mode: the cell has content if any member layer exists in
+            // this section; the panel's cdisp already shows the overlay
+            // (setActiveOverlay re-rendered all panels before this bake).
+            const _ov = App.activeOverlay;
+            const hasContent = _ov
+                ? (_ov.layers || []).some(l => (sec.msiSeries || {})[l.key])
+                : !!(sec.msiSeries || {})[focusKey];
             const pitchRaw = formatPixelPitchLabel(sec);
             const safePitch = String(pitchRaw || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
             const caption = safePitch ? (safeName + ' · ' + safePitch) : safeName;
             const panel = App.panels && App.panels.get(sec.id);
             let body;
-            if (!ent || !panel || !panel.dom || !panel.dom.cdisp || panel.dom.cdisp.width === 0) {
+            if (!hasContent || !panel || !panel.dom || !panel.dom.cdisp || panel.dom.cdisp.width === 0) {
                 body = '<div class="cell-empty">No data for this compound</div>';
             } else {
                 // Bake the master-saved rotation into a fresh canvas so the
@@ -9818,7 +10043,30 @@ const App = {
         Toolbar.refreshAll();
     },
 
+    // Active molecule-overlay definition ({id,name,layers:[{key,color}],bg})
+    // or null. Mutually exclusive with single-compound focus.
+    activeOverlay: null,
+
+    setActiveOverlay(def) {
+        this.activeOverlay = def || null;
+        for (const p of this.panels.values()) {
+            try { p.setupCanvasSize(); p.renderComposite(); } catch (e) {}
+        }
+        try { renderMethodTable(); } catch (e) {}
+        if (typeof Toolbar !== 'undefined' && Toolbar.refreshAll) Toolbar.refreshAll();
+    },
+    clearActiveOverlay() {
+        if (!this.activeOverlay) return;
+        this.activeOverlay = null;
+        for (const p of this.panels.values()) {
+            try { p.setupCanvasSize(); p.renderComposite(); } catch (e) {}
+        }
+        try { renderMethodTable(); } catch (e) {}
+        if (typeof Toolbar !== 'undefined' && Toolbar.refreshAll) Toolbar.refreshAll();
+    },
+
     setFocusCompoundKey(key) {
+        this.activeOverlay = null;   // selecting a single compound exits overlay mode
         this.focusCompoundKey = key || null;
         try { localStorage.setItem('desi:focusCompoundKey', this.focusCompoundKey || ''); } catch (e) {}
         for (const p of this.panels.values()) {
@@ -10056,6 +10304,7 @@ const App = {
         this.refreshViewModeUI();
         this._bindMethodHeaderSort();
         this._bindMrmRegister();
+        try { bindOverlayUi(); } catch (e) {}
         const persistedTh = parseInt(localStorage.getItem('desi:layout:sectionThumbH') || '', 10);
         if (Number.isFinite(persistedTh) && persistedTh > 0) this.thumbHeight = persistedTh;
         document.documentElement.style.setProperty('--thumb-h', this.thumbHeight + 'px');
@@ -10392,6 +10641,7 @@ const App = {
             })),
             rois: [],
             roiHidden: {},
+            overlays: _overlaysFromSections(doc.sections),
             memo: ensureMemoShape(projectMeta.memo || doc.memo),
             createdAt: doc.created_at || nowIso(),
             updatedAt: doc.updated_at || nowIso(),
@@ -10517,6 +10767,7 @@ const App = {
             })),
             rois: [],
             roiHidden: {},
+            overlays: _overlaysFromSections(doc.sections),
             // Carry master's project meta (colormap, etc.) intact so future
             // fields automatically round-trip without a hydrate-side patch.
             meta: projectMeta,
@@ -11656,6 +11907,6 @@ document.addEventListener('DOMContentLoaded', () => { App.init().catch(e => { co
      copy. Format: v:YYYY-MM-DD-rN where rN increments for each commit on
      the deploy branch. If the rN you see in the browser is older than what
      the maintainer told you, do a hard reload (Ctrl/Cmd-Shift-R). -->
-<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-26-r35</div>
+<div id="buildTag" title="Hard reload (Ctrl/Cmd+Shift+R) if older than the latest version" style="position:fixed;bottom:4px;right:6px;font-size:10px;color:#94a3b8;pointer-events:auto;z-index:50;user-select:text;">v:2026-05-26-r36</div>
 </body>
 </html>
